@@ -1,0 +1,92 @@
+# Escrow Monorepo — Cursor Rules
+
+## Product
+
+Custom **B2B Payout and Ledger Management Platform** (closed-loop treasury, not a public payment gateway).
+
+- **Provider:** EscrowStack (HDFC / VouchPay)
+- **Constraint:** Inbound deposits only from whitelisted accounts — known merchant circle only
+- **Goal:** Merchants view balances + request bank transfers; Admin approves transfers and manages users
+
+## Monorepo structure
+
+| App | Path | Stack | Hosting |
+|---|---|---|---|
+| User portal | `/apps/user-portal` | Next.js, Tailwind | Vercel (`xyz.com`) |
+| Admin portal | `/apps/admin-portal` | Next.js, Tailwind | Vercel (`admin.xyz.com`) |
+| Backend | `/apps/backend` | NestJS | Hostinger VPS (`api.xyz.com`, PM2 + Nginx) |
+
+**Database:** Supabase (PostgreSQL). Use SQL migrations in `apps/backend/supabase/migrations/`. Prisma may be added later — currently `@supabase/supabase-js` via service role.
+
+## Security (non-negotiable)
+
+- **Never** expose EscrowStack API keys, RSA private keys, or crypto to frontends
+- Per-merchant RSA keys: generated on user create, AES-256 encrypted at rest in DB, decrypted in-memory only for signing
+- Payout signing: RSA-SHA256 on unsigned JSON payload + `timestamp` (IST), then attach `signature`
+- User/admin portal auth JWTs are separate from EscrowStack credentials
+
+## EscrowStack API reference (backend only)
+
+**Reference files in repo root:**
+- `payout.cts.txt` — Node signing + payout flow (RSA-SHA256, IST timestamp)
+- `EStack-ESCROW-HDFC Chakrathalwar.postman_collection (1).json` — full Postman collection
+
+**Key endpoints:**
+- Balance: `POST /v1/escrow/fetch_transaction_account_balance` (base: `casesdf.escrowstack.io`)
+- Payout: `POST https://payoutesfc.escrowstack.io/payout/v1/prod` (IMPS/NEFT/RTGS/UPI)
+- Payout status: `POST /v1/escrow/get_payout_status`
+- Webhooks: register via `/v1/escrow/update_webhook_endpoint_url`
+
+**Payout payload:** `payouts[]` (payout_ref, amount, payout_mode, payee, beneficiary) + `timestamp` + `signature`. Header: `apikey` (JWT).
+
+**Payout lifecycle:** `EL_PS` submitted → webhook `processed` (`PO_BP_DCP`) or `failed` (`ERR_BP_IPR`)
+
+## Core money flows
+
+### Deposit (inbound)
+1. Whitelisted customer sends IMPS/NEFT to merchant virtual account
+2. EscrowStack webhook → NestJS backend
+3. Backend credits merchant `available_balance`
+4. User portal shows updated balance
+
+### Payout (outbound — pending trick)
+1. Merchant requests transfer on user portal
+2. Backend: deduct `available_balance`, add `pending_balance`, status `PENDING_APPROVAL`
+3. Admin approves → backend decrypts keys, signs, POST to EscrowStack → `PROCESSING`
+4. Webhook success → `SUCCESS`, remove from `pending_balance`
+5. Webhook failure → `FAILED`, return funds to `available_balance`
+
+## Database schema (planned)
+
+**merchants** (extends users): login, `virtual_account_no`, `escrow_ifsc`, `api_key`, `encrypted_private_key`, `available_balance`, `pending_balance`
+
+**transfers:** `merchant_id`, `amount`, beneficiary fields, `status` (`PENDING_APPROVAL` | `PROCESSING` | `SUCCESS` | `FAILED` | `REJECTED`)
+
+**Current tables:** `users` (plain password, admin-managed), `admins` (plain password, Supabase-editable)
+
+## Execution roadmap — build incrementally, one step at a time
+
+- [x] Step 1: Scaffold monorepo (Next.js × 2 + NestJS)
+- [x] Step 2: Supabase connected (service role, health check)
+- [x] Step 3: Admin auth + user CRUD (login, create/edit/delete users, plain password visibility for admin)
+- [x] Step 4: Internal ledger logic — pending balance + `PENDING_APPROVAL` transfers
+- [x] Step 5: EscrowStack API engine — RSA signing service (port `payout.cts.txt` logic)
+- [ ] Step 6: Webhook listeners — deposits + payout status (reconcile polling in place)
+- [x] Step 7: Admin approval UI — Approve/Reject buttons + bulk batch approve
+- [x] Step 8: User portal — balance view + single/bulk transfer + history
+- [ ] Step 9: CRON reconciliation — hourly Supabase vs bank balance
+- [ ] Step 10: Production deploy — Vercel + Hostinger VPS
+
+**Current position: Steps 6 & 9–10 remaining (webhooks, CRON, production deploy).**
+
+## Dev ports
+
+- Backend: `3000`
+- User portal: `3001`
+- Admin portal: `3002`
+
+## Build discipline
+
+- Ship small vertical slices; do not build the full product at once
+- Each step: migration (if needed) → backend service → API → minimal UI → test
+- Match existing code conventions in each app

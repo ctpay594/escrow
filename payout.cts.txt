@@ -1,0 +1,249 @@
+import fs from "fs";
+import crypto from "crypto";
+import axios from "axios";
+import https from "https";
+
+// Generate payout reference
+function generatePayoutRef(): string {
+    const now = new Date();
+
+    const indianTime = new Date(
+        now.toLocaleString("en-US", {
+            timeZone: "Asia/Kolkata"
+        })
+    );
+
+    const yyyy = indianTime.getFullYear();
+    const MM = String(indianTime.getMonth() + 1).padStart(2, "0");
+    const dd = String(indianTime.getDate()).padStart(2, "0");
+    const hh = String(indianTime.getHours()).padStart(2, "0");
+    const mm = String(indianTime.getMinutes()).padStart(2, "0");
+    const ss = String(indianTime.getSeconds()).padStart(2, "0");
+
+    return `${yyyy}${MM}${dd}${hh}${mm}${ss}test${Math.floor(Math.random() * 10000)}`;
+}
+
+// Indian timestamp
+function getIndianTimestamp(): string {
+    return new Date().toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour12: true
+    });
+}
+
+// Read file safely
+function readFileSafe(path: string): string {
+
+    if (!fs.existsSync(path)) {
+
+        console.error(`File not found: ${path}`);
+
+        process.exit(1);
+    }
+
+    return fs.readFileSync(path, "utf8").trim();
+}
+
+// Generate RSA Signature
+function generateRSASignature(
+    payload: string,
+    privateKeyPEM: string
+): string {
+
+    const privateKey = privateKeyPEM.includes("BEGIN PRIVATE KEY")
+        ? privateKeyPEM
+        : `-----BEGIN PRIVATE KEY-----\n${privateKeyPEM}\n-----END PRIVATE KEY-----`;
+
+    const signer = crypto.createSign("RSA-SHA256");
+
+    signer.update(payload);
+
+    signer.end();
+
+    return signer.sign(privateKey, "base64");
+}
+
+// HTTP POST
+async function httpPost(
+    url: string,
+    headers: any,
+    payload: string
+): Promise<any> {
+
+    try {
+
+        const response = await axios.post(url, payload, {
+            headers,
+
+            httpsAgent: new https.Agent({
+                rejectUnauthorized: false // local testing only
+            })
+        });
+
+        return response.data;
+
+    } catch (error: any) {
+
+        if (error.response) {
+            return error.response.data;
+        }
+
+        console.error("HTTP Error:", error.message);
+
+        process.exit(1);
+    }
+}
+
+// Invoke payout API
+async function invokePayoutAPI(
+    mode: string,
+    payoutRef: string,
+    amount: number,
+    userRef: string,
+    accountNo: string,
+    accountName: string,
+    ifsc: string,
+    apiKey: string
+): Promise<string> {
+
+    const timestamp = getIndianTimestamp();
+
+    const data: any = {
+        payouts: [
+            {
+                payout_ref: payoutRef,
+                amount: amount,
+                payout_mode: mode,
+                transaction_note: "debit",
+
+                payee: {
+                    user_ref: userRef
+                },
+
+                beneficiary: {
+                    account_name: accountName,
+                    account_no: accountNo,
+                    ifsc: ifsc
+                }
+            }
+        ],
+
+        timestamp
+    };
+
+    // Unsigned JSON
+    const unsignedJson = JSON.stringify(data);
+
+    // Read private key
+    const privateKey = readFileSafe("./privatekey.key");
+
+    // Generate signature
+    const signature = generateRSASignature(
+        unsignedJson,
+        privateKey
+    );
+
+    // Add signature
+    data.signature = signature;
+
+    const finalPayload = JSON.stringify(data);
+
+    const headers = {
+        "Content-Type": "application/json",
+        "apikey": apiKey
+    };
+
+    console.log("\n=== Request Body of Payout API (Signed) ===");
+
+    console.log(JSON.stringify(data, null, 2));
+
+    const response = await httpPost(
+        "https://payoutesfc.escrowstack.io/payout/v1/prod",
+        headers,
+        finalPayload
+    );
+
+    console.log("\nPayout Response --->");
+
+    console.log(response);
+
+    return payoutRef;
+}
+
+// Invoke payout status
+async function invokePayoutStatus(
+    payoutRef: string,
+    apiKey: string
+): Promise<void> {
+
+    const statusPayload = {
+        payout_ref_arr: [payoutRef]
+    };
+
+    console.log("\n=== Request Body of Status API ===");
+
+    console.log(
+        JSON.stringify(statusPayload, null, 2)
+    );
+
+    const headers = {
+        "Content-Type": "application/json",
+        "apikey": apiKey
+    };
+
+    console.log("\nInvoking the Payout Status.......");
+
+    const response = await httpPost(
+        "https://casesdf.escrowstack.io/v1/escrow/get_payout_status",
+        headers,
+        JSON.stringify(statusPayload)
+    );
+
+    console.log("\nPayout Status Response --->");
+
+    console.log(JSON.stringify(response, null, 2));
+}
+
+// Main
+async function main(): Promise<void> {
+
+    const payoutRef = generatePayoutRef();
+
+    const payoutMode = "IMPS";
+
+    const amount = 1;
+
+    const accountNo = "1234567890";
+
+    const accountName = "TestAccount";
+
+    const ifsc = "SBIN0012743";
+
+    const userRef = "testUser";
+
+    const apiKey = readFileSafe("./apikey.txt");
+
+    const ref = await invokePayoutAPI(
+        payoutMode,
+        payoutRef,
+        amount,
+        userRef,
+        accountNo,
+        accountName,
+        ifsc,
+        apiKey
+    );
+
+    console.log("\nSleeping for 10 seconds...\n");
+
+    await new Promise(resolve =>
+        setTimeout(resolve, 10000)
+    );
+
+    await invokePayoutStatus(
+        ref,
+        apiKey
+    );
+}
+
+main();

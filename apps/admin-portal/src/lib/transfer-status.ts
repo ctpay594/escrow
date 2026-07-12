@@ -1,0 +1,26 @@
+import type { BadgeProps } from '@/components/ui/badge';
+
+export const transferStatusVariant: Record<string, BadgeProps['variant']> = {
+  PENDING_APPROVAL: 'warning',
+  PROCESSING: 'processing',
+  SUCCESS: 'success',
+  FAILED: 'destructive',
+  REJECTED: 'secondary',
+};
+
+export function transferStatusLabel(status: string): string {
+  switch (status) {
+    case 'PENDING_APPROVAL':
+      return 'Pending approval';
+    case 'PROCESSING':
+      return 'Processing';
+    case 'SUCCESS':
+      return 'Completed';
+    case 'FAILED':
+      return 'Failed';
+    case 'REJECTED':
+      return 'Rejected';
+    default:
+      return status.replaceAll('_', ' ');
+  }
+}

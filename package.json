@@ -1,0 +1,26 @@
+{
+  "name": "escrow",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:user": "pnpm --filter user-portal dev",
+    "dev:admin": "pnpm --filter admin-portal dev",
+    "dev:backend": "pnpm --filter backend start:dev",
+    "build:user": "pnpm --filter user-portal build",
+    "build:admin": "pnpm --filter admin-portal build",
+    "build:backend": "pnpm --filter backend build",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "bcrypt",
+      "sharp",
+      "unrs-resolver"
+    ]
+  }
+}

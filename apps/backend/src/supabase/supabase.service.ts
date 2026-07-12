@@ -1,7 +1,25 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import {
+  createClient,
+  type SupabaseClient,
+  type SupabaseClientOptions,
+} from '@supabase/supabase-js';
+import ws from 'ws';
 import type { HealthCheckResult } from '../health/health.types';
+
+/** Node < 22 needs explicit WebSocket transport for Supabase Realtime init. */
+const supabaseClientOptions = {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+  realtime: {
+    transport: ws as NonNullable<
+      SupabaseClientOptions<'public'>['realtime']
+    >['transport'],
+  },
+};
 
 @Injectable()
 export class SupabaseService {
@@ -15,12 +33,7 @@ export class SupabaseService {
       'SUPABASE_SERVICE_ROLE_KEY',
     );
 
-    this.adminClient = createClient(url, serviceRoleKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    });
+    this.adminClient = createClient(url, serviceRoleKey, supabaseClientOptions);
   }
 
   private normalizeUrl(url: string): string {
@@ -85,14 +98,11 @@ export class SupabaseService {
     const anonKey = this.configService.getOrThrow<string>('SUPABASE_ANON_KEY');
 
     return createClient(url, anonKey, {
+      ...supabaseClientOptions,
       global: {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
-      },
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
       },
     });
   }

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { jwtExpiresInSeconds } from '../config/jwt-expires';
+import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
 import { AdminsModule } from '../admins';
 import { EscrowStackModule } from '../escrowstack';
 import { MerchantsModule } from '../merchants';
@@ -44,6 +45,7 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
     AdminAuthService,
     AdminUsersService,
     AdminJwtAuthGuard,
+    LoginRateLimitGuard,
   ],
 })
 export class AdminModule {}

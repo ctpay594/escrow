@@ -9,16 +9,14 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
 import { TransfersService, TransferReconcileService } from '../transfers';
 import type { TransferStatus } from '../transfers/transfers.types';
 import { AdminJwtAuthGuard } from './admin-jwt-auth.guard';
 import { AdminAuthService, AdminUsersService } from './admin.service';
 import type { AdminJwtPayload } from './admin.types';
 import { CurrentAdmin } from './current-admin.decorator';
-import {
-  AdminBootstrapDto,
-  AdminLoginDto,
-} from './dto/admin-login.dto';
+import { AdminLoginDto } from './dto/admin-login.dto';
 import {
   CreateManagedUserDto,
   FetchEscrowDetailsDto,
@@ -33,12 +31,8 @@ import {
 export class AdminAuthController {
   constructor(private readonly adminAuthService: AdminAuthService) {}
 
-  @Post('bootstrap')
-  bootstrap(@Body() dto: AdminBootstrapDto) {
-    return this.adminAuthService.bootstrap(dto);
-  }
-
   @Post('login')
+  @UseGuards(LoginRateLimitGuard)
   login(@Body() dto: AdminLoginDto) {
     return this.adminAuthService.login(dto);
   }

@@ -1,15 +1,11 @@
-import {
-  BadRequestException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AdminsService } from '../admins';
 import { EscrowStackService } from '../escrowstack';
 import { MerchantsService } from '../merchants';
 import { UsersService } from '../users';
 import type { AdminAuthResponse, AdminJwtPayload } from './admin.types';
-import type { AdminBootstrapDto, AdminLoginDto } from './dto/admin-login.dto';
+import type { AdminLoginDto } from './dto/admin-login.dto';
 import type {
   CreateManagedUserDto,
   FetchEscrowDetailsDto,
@@ -24,18 +20,6 @@ export class AdminAuthService {
     private readonly adminsService: AdminsService,
     private readonly jwtService: JwtService,
   ) {}
-
-  async bootstrap(dto: AdminBootstrapDto): Promise<AdminAuthResponse> {
-    const adminCount = await this.adminsService.count();
-
-    if (adminCount > 0) {
-      throw new BadRequestException('Admin account already exists');
-    }
-
-    const admin = await this.adminsService.create(dto.username, dto.password);
-
-    return this.buildAuthResponse(admin);
-  }
 
   async login(dto: AdminLoginDto): Promise<AdminAuthResponse> {
     const admin = await this.adminsService.findByUsername(dto.username);

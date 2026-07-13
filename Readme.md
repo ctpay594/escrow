@@ -2,7 +2,8 @@
 
 B2B payout and ledger platform built on **EscrowStack** (HDFC / VouchPay). Merchants use the **CTPay user portal**; admins onboard merchants and manage accounts from the **admin portal**. All EscrowStack keys and RSA signing stay on the backend only.
 
-**Full project doc:** [`About.md`](About.md)
+**Full project doc:** [`About.md`](About.md)  
+**Production hosting:** [`DEPLOYMENT.md`](DEPLOYMENT.md)
 
 ## Apps
 
@@ -27,6 +28,8 @@ B2B payout and ledger platform built on **EscrowStack** (HDFC / VouchPay). Merch
 - Admin transfer approval with RSA-SHA256 payout signing
 - Payout status reconcile polling (webhook wiring planned)
 - Merchant **account status** enforcement (`active` / `on_hold` / `terminated`) on transfer API
+- Login rate limit: 10 attempts per IP per 15 minutes (merchant + admin)
+- No public root page on API (`GET /` returns 404); use `GET /health` only
 
 ### Admin portal (`localhost:3002`)
 - Login / logout (7-day session)
@@ -105,21 +108,27 @@ Run these in **Supabase → SQL Editor** (in order):
 8. `008_merchant_balance_mode.sql`
 9. `009_transfer_batches.sql`
 10. `010_merchant_account_status.sql`
-11. `011_admins_plain_password.sql` — re-bootstrap admin or set password manually after run
+11. `011_admins_plain_password.sql` — insert admin password manually in Supabase after run
 
 All files live in `apps/backend/supabase/migrations/`.
 
-### 4. Create first admin (once)
+### 4. Create admin (Supabase only)
 
-Start backend, then:
+There is **no bootstrap API**. Add the first admin in **Supabase → Table Editor → `admins`**:
 
-```powershell
-Invoke-RestMethod -Uri "http://localhost:3000/admin/auth/bootstrap" -Method POST `
-  -ContentType "application/json" `
-  -Body '{"username":"admin","password":"admin123456"}'
+| Column | Value |
+|--------|--------|
+| `username` | e.g. `admin` |
+| `password` | plain text, min 6 chars |
+
+Or run in SQL Editor:
+
+```sql
+INSERT INTO public.admins (username, password)
+VALUES ('admin', 'your-strong-password-here');
 ```
 
-Only works when the `admins` table is empty. After migration `011`, existing bcrypt admins are removed — bootstrap again or insert a row in Supabase.
+Login at the admin portal (`/login`). To reset a password later, edit the row in Supabase.
 
 ### 5. Run dev servers
 
@@ -145,12 +154,44 @@ pnpm dev:admin     # Admin portal on http://localhost:3002
 | `pnpm build:admin` | Build admin portal only |
 | `pnpm lint` | Lint all apps |
 
+## Production (CTPay)
+
+| App | URL |
+|-----|-----|
+| User portal | `https://ctpay.tech` |
+| Admin portal | `https://ct123.ctpay.tech` (hidden subdomain) |
+| Backend API | `https://api.ctpay.tech` |
+
+**Hosting:** User + admin on **Vercel**; backend on **Hostinger VPS**; database on **Supabase**.
+
+### Deploy after code changes
+
+See **[`DEPLOYMENT.md`](DEPLOYMENT.md)** for full hosting setup (DNS, VPS, Vercel, Supabase).
+
+| App | How |
+|-----|-----|
+| **User portal** | Push to GitHub → Vercel auto-deploys (`apps/user-portal`) |
+| **Admin portal** | Push to GitHub → Vercel auto-deploys (`apps/admin-portal`) |
+| **Backend** | SSH to VPS, then: |
+
+```bash
+cd /var/www/escrow
+git pull
+cd apps/backend
+pnpm install
+pnpm build
+pm2 restart escrow-api
+```
+
+Vercel env (each frontend project): `API_URL=https://api.ctpay.tech`, `NODE_ENV=production`.
+
+Backend `.env` on VPS only — update `CORS_ORIGIN` if portal domains change.
+
 ## Coming next
 
 - Deposit webhooks crediting `real_balance` automatically
 - Full payout webhook handling without manual reconcile
 - Hourly CRON reconciliation (Supabase vs bank balance)
-- Production deploy (Vercel + Hostinger VPS)
 
 ## Transfer request fields (EscrowStack)
 
@@ -167,6 +208,7 @@ pnpm dev:admin     # Admin portal on http://localhost:3002
 ## Reference files
 
 - `About.md` — full architecture, APIs, money flows, security
+- `DEPLOYMENT.md` — production hosting step-by-step
 - `payout.cts.txt` — payout signing example
 - `EStack-ESCROW-HDFC Chakrathalwar.postman_collection (1).json` — EscrowStack API collection
 

@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './current-user.decorator';
 import { LoginDto } from './dto/login.dto';
@@ -16,6 +17,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @UseGuards(LoginRateLimitGuard)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }

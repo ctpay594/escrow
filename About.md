@@ -34,6 +34,7 @@ Merchants use the **user portal** to view balance, load funds, and request payou
 - `payout.cts.txt` — Node RSA-SHA256 signing + payout flow (IST timestamp)
 - `EStack-ESCROW-HDFC Chakrathalwar.postman_collection (1).json` — full EscrowStack API collection
 - `Readme.md` — quick start and commands
+- `DEPLOYMENT.md` — production hosting (Vercel + VPS + DNS + updates)
 - `.cursorrules` — Cursor agent rules for this repo
 
 ---
@@ -187,6 +188,7 @@ Base URL: `http://localhost:3000` (dev)
 ### Merchant auth (`/auth`)
 
 - `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
+- Login rate-limited (10 attempts / 15 min per IP)
 - JWT in httpOnly cookie (separate from admin JWT)
 
 ### Merchant transfers (`/transfers`) — JWT required
@@ -198,8 +200,9 @@ Base URL: `http://localhost:3000` (dev)
 
 ### Admin auth (`/admin/auth`)
 
-- `POST /admin/auth/bootstrap` — first admin only (empty table)
 - `POST /admin/auth/login`, `GET /admin/auth/me`, `POST /admin/auth/logout`
+- Login rate-limited (10 attempts / 15 min per IP)
+- **No bootstrap endpoint** — create admins in Supabase `admins` table only
 
 ### Admin merchants (`/admin/users`) — admin JWT
 
@@ -303,7 +306,40 @@ Same glass design language as admin (`glass-styles.ts`, `GlassCard`, frosted dia
 5. CORS limited to portal origins
 6. Payout signing only in backend `escrowstack` + `transfers` services
 7. Account status enforced server-side on transfer create (UI disable is supplementary)
-8. After migration `011`, re-bootstrap admin or insert password before exposing API publicly
+8. Login rate limit on merchant + admin auth (in-memory, per VPS instance)
+9. API root (`GET /`) returns 404 — no public “Hello World” page
+10. Admins created only in Supabase — no `/admin/auth/bootstrap`
+
+---
+
+## Production deployment
+
+| App | URL | Host |
+|-----|-----|------|
+| User portal | `https://ctpay.tech` | Vercel |
+| Admin portal | `https://ct123.ctpay.tech` | Vercel |
+| Backend API | `https://api.ctpay.tech` | Hostinger VPS (PM2 + Nginx) |
+| Database | Supabase cloud | — |
+
+**DNS:** Only `api` subdomain → VPS IP. `ctpay.tech`, `www`, and admin subdomain → Vercel.
+
+### Updating production
+
+| Change | Action |
+|--------|--------|
+| Frontend code | `git push` → Vercel redeploys both portal projects automatically |
+| Backend code | SSH to VPS → `git pull` → `pnpm install` → `pnpm build` → `pm2 restart escrow-api` |
+| Env vars | Vercel dashboard (frontends) or `/var/www/escrow/apps/backend/.env` (API) |
+
+**Vercel env per portal:** `API_URL=https://api.ctpay.tech`, `NODE_ENV=production`.
+
+### Create / reset admin
+
+Supabase → `admins` table → insert or edit `username` + `password` (plain text, min 6 chars). No API bootstrap.
+
+```sql
+INSERT INTO public.admins (username, password) VALUES ('admin', 'strong-password');
+```
 
 ---
 
@@ -318,15 +354,7 @@ pnpm dev:admin     # :3002
 
 Copy `apps/backend/.env.example` → `.env` and set Supabase, JWT, EscrowStack, `ESCROW_AES_MASTER_KEY`, `CORS_ORIGIN`.
 
-First admin (once):
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:3000/admin/auth/bootstrap" -Method POST `
-  -ContentType "application/json" `
-  -Body '{"username":"admin","password":"admin123456"}'
-```
-
-See `Readme.md` for full migration list and env vars.
+Create admin in Supabase `admins` table (see above). See `Readme.md` for full migration list.
 
 ---
 
@@ -343,7 +371,7 @@ See `Readme.md` for full migration list and env vars.
 | 7 | Done | Admin approval UI |
 | 8 | Done | User portal balance + transfers |
 | 9 | Planned | CRON reconciliation (hourly) |
-| 10 | Planned | Production deploy (Vercel + VPS) |
+| 10 | Done | Production deploy (Vercel + Hostinger VPS) |
 
 **Still planned / incomplete:**
 
@@ -377,10 +405,12 @@ When starting a new chat or agent session on this repo:
 
 ---
 
-## GitHub
+## Reference docs
 
-Repository: [github.com/0xali3n/escrow](https://github.com/0xali3n/escrow)
+- [`Readme.md`](Readme.md) — quick start, migrations, commands
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) — production deploy, DNS, VPS, Vercel, troubleshooting
+- [`About.md`](About.md) — architecture, APIs, money flows (this file)
 
 ---
 
-*Last updated: July 2026 — reflects merchant hub, bulk transfers, account status badges, Yes/No confirms, mobile polish, admin plain passwords (011), and full user/admin glass UI.*
+*Last updated: July 2026*

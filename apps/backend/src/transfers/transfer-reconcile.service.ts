@@ -2,15 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { TransfersService } from './transfers.service';
 
 const RECONCILE_DELAYS_MS = [
-  10_000,
-  10_000,
-  15_000,
-  15_000,
-  20_000,
-  30_000,
-  30_000,
-  45_000,
-  60_000,
+  10_000, 10_000, 15_000, 15_000, 20_000, 30_000, 30_000, 45_000, 60_000,
 ];
 
 @Injectable()

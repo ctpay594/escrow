@@ -330,6 +330,49 @@ pm2 logs escrow-api --lines 30
 
 ---
 
+## EscrowStack webhooks
+
+**URL to give EscrowStack:**
+
+```text
+POST https://api.ctpay.tech/webhooks/escrowstack
+```
+
+### Phase 1 (current — testing)
+
+| What | Detail |
+|------|--------|
+| Auth / signature | **None for now** — open POST endpoint so EscrowStack can send test callbacks |
+| Every request saved? | **Yes** — full JSON + IP + user-agent + headers in Supabase `webhook_events` |
+| Business logic | Payout/deposit handling runs if payload is recognizable; errors still return **200** so bank retries don't flood |
+| Future | Add RSA signature verification once EscrowStack shares their public key |
+
+**Before first webhook:** run **`012_webhook_events.sql`** in Supabase SQL Editor (and **`013_webhook_request_meta.sql`** if you already ran an older 012).
+
+**Quick check in browser or curl:**
+
+```bash
+# Should say "running" / callback is live
+curl https://api.ctpay.tech/webhooks/escrowstack
+
+# Parent list
+curl https://api.ctpay.tech/webhooks
+```
+
+Wrong path (e.g. `/webhooks/escrow`) returns **404** — callback not configured there.
+
+**Test POST:**
+
+```bash
+curl -X POST https://api.ctpay.tech/webhooks/escrowstack \
+  -H "Content-Type: application/json" \
+  -d "{\"code\":\"TEST\",\"message\":\"hello\"}"
+```
+
+Response example: `{"ok":true,"status":"received","message":"Callback received and saved..."}`
+
+---
+
 ## Troubleshooting
 
 ### `ctpay.tech` shows Hello World or nginx 404

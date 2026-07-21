@@ -69,7 +69,7 @@ export class MerchantsService {
       );
     }
 
-    return this.toPublicProfile(data as MerchantProfileRow);
+    return this.toPublicProfile(data);
   }
 
   async findPublicProfileByUserId(
@@ -194,8 +194,10 @@ export class MerchantsService {
           Number(merchant?.pending_balance ?? 0),
           balances?.balance_mode ?? 'demo',
         ),
-        real_balance: balances?.real_balance ?? Number(merchant?.available_balance ?? 0),
-        demo_balance: balances?.demo_balance ?? Number(merchant?.available_balance ?? 0),
+        real_balance:
+          balances?.real_balance ?? Number(merchant?.available_balance ?? 0),
+        demo_balance:
+          balances?.demo_balance ?? Number(merchant?.available_balance ?? 0),
         pending_balance: Number(merchant?.pending_balance ?? 0),
         balance_mode: balances?.balance_mode ?? 'demo',
         account_status: balances?.account_status ?? 'active',
@@ -205,9 +207,7 @@ export class MerchantsService {
     });
   }
 
-  private async loadBalanceMapByUserIds(
-    userIds: string[],
-  ): Promise<
+  private async loadBalanceMapByUserIds(userIds: string[]): Promise<
     Map<
       string,
       {
@@ -246,9 +246,14 @@ export class MerchantsService {
         .in('user_id', userIds);
 
       if (!error) {
-        for (const row of (data ?? []) as unknown as Record<string, unknown>[]) {
+        for (const row of (data ?? []) as unknown as Record<
+          string,
+          unknown
+        >[]) {
           const availableBalance = Number(row.available_balance ?? 0);
-          const cachedBank = this.readCachedBankBalance(row.escrow_account_details);
+          const cachedBank = this.readCachedBankBalance(
+            row.escrow_account_details,
+          );
           const realBalance =
             row.real_balance !== undefined && row.real_balance !== null
               ? Number(row.real_balance)
@@ -270,7 +275,9 @@ export class MerchantsService {
       }
 
       if (!this.isMissingBalanceColumnError(error.message)) {
-        throw new InternalServerErrorException('Failed to load merchant balances');
+        throw new InternalServerErrorException(
+          'Failed to load merchant balances',
+        );
       }
     }
 
@@ -303,7 +310,7 @@ export class MerchantsService {
       const data = nested.data;
 
       if (typeof data === 'object' && data !== null && 'balance' in data) {
-        const parsed = Number((data as { balance: unknown }).balance);
+        const parsed = Number(data.balance);
         if (Number.isFinite(parsed)) {
           return parsed;
         }
@@ -320,9 +327,7 @@ export class MerchantsService {
     return null;
   }
 
-  private isSupabaseErrorRow(
-    value: unknown,
-  ): value is { error: true } {
+  private isSupabaseErrorRow(value: unknown): value is { error: true } {
     return (
       typeof value === 'object' &&
       value !== null &&
@@ -350,7 +355,10 @@ export class MerchantsService {
     account_status?: unknown;
     escrow_account_details?: unknown;
   }): MerchantAccountStatus {
-    if (row.account_status === 'on_hold' || row.account_status === 'terminated') {
+    if (
+      row.account_status === 'on_hold' ||
+      row.account_status === 'terminated'
+    ) {
       return row.account_status;
     }
 
@@ -362,8 +370,9 @@ export class MerchantsService {
       typeof row.escrow_account_details === 'object' &&
       row.escrow_account_details !== null
     ) {
-      const status = (row.escrow_account_details as { account_status?: unknown })
-        .account_status;
+      const status = (
+        row.escrow_account_details as { account_status?: unknown }
+      ).account_status;
 
       if (status === 'on_hold' || status === 'terminated') {
         return status;
@@ -399,8 +408,8 @@ export class MerchantsService {
     if (
       typeof row.escrow_account_details === 'object' &&
       row.escrow_account_details !== null &&
-      (row.escrow_account_details as { balance_mode?: unknown }).balance_mode ===
-        'real'
+      (row.escrow_account_details as { balance_mode?: unknown })
+        .balance_mode === 'real'
     ) {
       return 'real';
     }
@@ -423,10 +432,9 @@ export class MerchantsService {
     };
   }
 
-  private async loadMerchantBalanceRow(userId: string): Promise<Record<
-    string,
-    unknown
-  > | null> {
+  private async loadMerchantBalanceRow(
+    userId: string,
+  ): Promise<Record<string, unknown> | null> {
     const fullSelect =
       'real_balance, demo_balance, pending_balance, available_balance, balance_mode, account_status, escrow_account_details';
     const fallbackSelect =
@@ -449,10 +457,12 @@ export class MerchantsService {
     }
 
     if (error) {
-      throw new InternalServerErrorException('Failed to load merchant balances');
+      throw new InternalServerErrorException(
+        'Failed to load merchant balances',
+      );
     }
 
-    return (data as Record<string, unknown> | null) ?? null;
+    return data ?? null;
   }
 
   async updateDemoBalanceByUserId(
@@ -493,11 +503,17 @@ export class MerchantsService {
     const data = await this.loadMerchantBalanceRow(userId);
 
     if (!data) {
-      throw new InternalServerErrorException('Failed to load merchant balances');
+      throw new InternalServerErrorException(
+        'Failed to load merchant balances',
+      );
     }
 
-    const realBalance = Number(data.real_balance ?? data.available_balance ?? 0);
-    const demoBalance = Number(data.demo_balance ?? data.available_balance ?? 0);
+    const realBalance = Number(
+      data.real_balance ?? data.available_balance ?? 0,
+    );
+    const demoBalance = Number(
+      data.demo_balance ?? data.available_balance ?? 0,
+    );
     const pendingBalance = Number(data.pending_balance ?? 0);
     const availableBalance = this.resolveAvailableBalance(
       realBalance,
@@ -587,7 +603,9 @@ export class MerchantsService {
         .eq('user_id', userId);
 
       if (fallbackError) {
-        throw new InternalServerErrorException('Failed to update account status');
+        throw new InternalServerErrorException(
+          'Failed to update account status',
+        );
       }
 
       return { accountStatus };
@@ -654,7 +672,9 @@ export class MerchantsService {
     }
 
     const nextDemoBalance = Number((ledger.demoBalance - amount).toFixed(2));
-    const nextPendingBalance = Number((ledger.pendingBalance + amount).toFixed(2));
+    const nextPendingBalance = Number(
+      (ledger.pendingBalance + amount).toFixed(2),
+    );
 
     const { error } = await this.supabaseService
       .getAdminClient()
@@ -667,7 +687,9 @@ export class MerchantsService {
       .eq('user_id', userId);
 
     if (error) {
-      throw new InternalServerErrorException('Failed to reserve transfer funds');
+      throw new InternalServerErrorException(
+        'Failed to reserve transfer funds',
+      );
     }
   }
 
@@ -741,7 +763,9 @@ export class MerchantsService {
       .maybeSingle();
 
     if (error || !data) {
-      throw new InternalServerErrorException('Failed to load merchant balances');
+      throw new InternalServerErrorException(
+        'Failed to load merchant balances',
+      );
     }
 
     const existingDetails =
@@ -783,6 +807,126 @@ export class MerchantsService {
     }
   }
 
+  async creditDepositFromWebhook(
+    payload: Record<string, unknown>,
+  ): Promise<{ outcome: string; merchantId?: string }> {
+    const amount = this.pickWebhookAmount(payload);
+
+    if (amount === null || amount <= 0) {
+      return { outcome: 'ignored_invalid_amount' };
+    }
+
+    const virtualAccount =
+      this.pickWebhookString(payload, 'virtual_account_no') ??
+      this.pickWebhookString(payload, 'virtual_account_number') ??
+      this.pickWebhookString(payload, 'ac_no') ??
+      this.pickWebhookString(payload, 'account_no');
+    const userRef = this.pickWebhookString(payload, 'user_ref');
+
+    const merchant = virtualAccount
+      ? await this.findMerchantByVirtualAccount(virtualAccount)
+      : userRef
+        ? await this.findMerchantByUserRef(userRef)
+        : null;
+
+    if (!merchant) {
+      return { outcome: 'merchant_not_found' };
+    }
+
+    const balanceMap = await this.loadBalanceMapByUserIds([merchant.userId]);
+    const balances = balanceMap.get(merchant.userId);
+    const currentReal = balances?.real_balance ?? 0;
+    const nextReal = Number((currentReal + amount).toFixed(2));
+
+    await this.updateRealBalanceByUserId(merchant.userId, nextReal);
+
+    return {
+      outcome: 'credited',
+      merchantId: merchant.merchantId,
+    };
+  }
+
+  private async findMerchantByVirtualAccount(
+    virtualAccountNo: string,
+  ): Promise<{
+    userId: string;
+    merchantId: string;
+  } | null> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('merchants')
+      .select('id, user_id')
+      .eq('virtual_account_no', virtualAccountNo)
+      .maybeSingle();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return {
+      userId: data.user_id as string,
+      merchantId: data.id as string,
+    };
+  }
+
+  private async findMerchantByUserRef(userRef: string): Promise<{
+    userId: string;
+    merchantId: string;
+  } | null> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('merchants')
+      .select('id, user_id')
+      .eq('user_ref', userRef)
+      .maybeSingle();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return {
+      userId: data.user_id as string,
+      merchantId: data.id as string,
+    };
+  }
+
+  private pickWebhookString(
+    payload: Record<string, unknown>,
+    key: string,
+  ): string | null {
+    const value = payload[key];
+
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+
+    return null;
+  }
+
+  private pickWebhookAmount(payload: Record<string, unknown>): number | null {
+    for (const key of ['amount', 'credit_amount', 'txn_amount', 'value']) {
+      const raw = payload[key];
+
+      if (typeof raw === 'number' && Number.isFinite(raw)) {
+        return raw;
+      }
+
+      if (typeof raw === 'string' && raw.trim()) {
+        const parsed = Number(raw);
+
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+    }
+
+    return null;
+  }
+
   async deleteByUserId(userId: string): Promise<void> {
     const { error } = await this.supabaseService
       .getAdminClient()
@@ -791,7 +935,9 @@ export class MerchantsService {
       .eq('user_id', userId);
 
     if (error) {
-      throw new InternalServerErrorException('Failed to delete merchant profile');
+      throw new InternalServerErrorException(
+        'Failed to delete merchant profile',
+      );
     }
   }
 
@@ -856,7 +1002,10 @@ export class MerchantsService {
   private extractLoadInstructions(
     escrowAccountDetails: unknown,
   ): Record<string, string[]> | null {
-    if (typeof escrowAccountDetails !== 'object' || escrowAccountDetails === null) {
+    if (
+      typeof escrowAccountDetails !== 'object' ||
+      escrowAccountDetails === null
+    ) {
       return null;
     }
 

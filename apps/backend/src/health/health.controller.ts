@@ -9,7 +9,9 @@ export class HealthController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
-  async getHealth(@Res({ passthrough: true }) res: Response): Promise<HealthResponse> {
+  async getHealth(
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<HealthResponse> {
     const health = await this.healthService.getHealth();
 
     if (health.status === 'error') {

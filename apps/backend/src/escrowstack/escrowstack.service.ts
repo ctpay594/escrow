@@ -1,13 +1,6 @@
-import {
-  BadGatewayException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  getIndianPayoutTimestamp,
-  signPayoutPayload,
-} from './payout-signing';
+import { getIndianPayoutTimestamp, signPayoutPayload } from './payout-signing';
 import type {
   EscrowAccountDetailsResult,
   EscrowBalanceResult,
@@ -36,7 +29,11 @@ export class EscrowStackService {
   }
 
   async fetchTransactionBalance(apiKey: string): Promise<EscrowBalanceResult> {
-    const response = await this.post(apiKey, '/v1/escrow/fetch_transaction_account_balance', {});
+    const response = await this.post(
+      apiKey,
+      '/v1/escrow/fetch_transaction_account_balance',
+      {},
+    );
     const balance = this.extractBalance(response);
 
     return {
@@ -138,7 +135,9 @@ export class EscrowStackService {
       signature = signPayoutPayload(unsignedPayload, privateKey);
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'Failed to sign payout payload';
+        error instanceof Error
+          ? error.message
+          : 'Failed to sign payout payload';
       this.logger.error('Payout signing failed', message);
       throw new BadGatewayException(message);
     }
@@ -250,7 +249,7 @@ export class EscrowStackService {
     const data = response.data;
 
     if (typeof data === 'object' && data !== null && 'balance' in data) {
-      const balance = Number((data as { balance: unknown }).balance);
+      const balance = Number(data.balance);
 
       if (!Number.isNaN(balance)) {
         return balance;
@@ -268,7 +267,9 @@ export class EscrowStackService {
     return 0;
   }
 
-  private extractErrorMessage(response: Record<string, unknown>): string | null {
+  private extractErrorMessage(
+    response: Record<string, unknown>,
+  ): string | null {
     const data = response.data;
 
     if (typeof data === 'object' && data !== null) {

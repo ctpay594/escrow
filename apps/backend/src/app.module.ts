@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AdminModule } from './admin';
 import { AuthModule } from './auth';
 import { TransfersModule } from './transfers';
+import { WebhooksModule } from './webhooks';
 import { CryptoModule } from './crypto';
 import { HealthModule } from './health';
 import { SupabaseModule } from './supabase';
@@ -19,6 +20,7 @@ import { SupabaseModule } from './supabase';
     AuthModule,
     TransfersModule,
     AdminModule,
+    WebhooksModule,
   ],
 })
 export class AppModule {}

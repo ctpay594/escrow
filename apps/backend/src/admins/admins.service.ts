@@ -50,7 +50,7 @@ export class AdminsService {
       throw new InternalServerErrorException('Failed to look up admin');
     }
 
-    return data as PublicAdmin | null;
+    return data;
   }
 
   async create(username: string, password: string): Promise<PublicAdmin> {
@@ -69,6 +69,6 @@ export class AdminsService {
       throw new InternalServerErrorException('Failed to create admin');
     }
 
-    return data as PublicAdmin;
+    return data;
   }
 }

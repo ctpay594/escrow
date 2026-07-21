@@ -1,4 +1,11 @@
-import { IsIn, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class FetchEscrowDetailsDto {
   @IsString()

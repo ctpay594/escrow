@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AdminsService } from '../admins';
 import { EscrowStackService } from '../escrowstack';
@@ -96,8 +100,9 @@ export class AdminUsersService {
       const snapshot = await this.fetchEscrowSnapshot(dto.escrow_api_key);
       const demoBalance = dto.demo_balance ?? snapshot.availableBalance;
 
-      const apiKeyLabel =
-        this.escrowStackService.decodeMerchantNameFromApiKey(dto.escrow_api_key);
+      const apiKeyLabel = this.escrowStackService.decodeMerchantNameFromApiKey(
+        dto.escrow_api_key,
+      );
 
       const merchant = await this.merchantsService.create({
         userId: user.id,
@@ -221,8 +226,9 @@ export class AdminUsersService {
 
   async refreshRealBalance(id: string) {
     const credentials = await this.merchantsService.getDecryptedCredentials(id);
-    const balanceResult =
-      await this.escrowStackService.fetchTransactionBalance(credentials.apiKey);
+    const balanceResult = await this.escrowStackService.fetchTransactionBalance(
+      credentials.apiKey,
+    );
 
     await this.merchantsService.updateRealBalanceByUserId(
       id,

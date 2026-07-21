@@ -96,12 +96,11 @@ export class TransfersService {
       .single();
 
     if (error || !data) {
-      await this.merchantsService.releaseHeldFunds(
-        input.userId,
-        input.amount,
-      );
+      await this.merchantsService.releaseHeldFunds(input.userId, input.amount);
 
-      throw new InternalServerErrorException('Failed to create transfer request');
+      throw new InternalServerErrorException(
+        'Failed to create transfer request',
+      );
     }
 
     return this.toPublicTransfer(
@@ -205,7 +204,9 @@ export class TransfersService {
           .single();
 
         if (error || !data) {
-          throw new InternalServerErrorException('Failed to create bulk transfer row');
+          throw new InternalServerErrorException(
+            'Failed to create bulk transfer row',
+          );
         }
 
         createdTransfers.push(
@@ -216,7 +217,10 @@ export class TransfersService {
       }
     } catch (error) {
       for (let index = heldAmounts.length - 1; index >= 0; index -= 1) {
-        await this.merchantsService.releaseHeldFunds(userId, heldAmounts[index]);
+        await this.merchantsService.releaseHeldFunds(
+          userId,
+          heldAmounts[index],
+        );
       }
 
       await this.supabaseService
@@ -332,7 +336,7 @@ export class TransfersService {
     });
 
     return rows.map((row) =>
-      this.toAdminTransfer(row as unknown as Record<string, unknown>),
+      this.toAdminTransfer(row as Record<string, unknown>),
     );
   }
 
@@ -413,7 +417,9 @@ export class TransfersService {
     const { data, error } = await query;
 
     if (error) {
-      throw new InternalServerErrorException('Failed to load processing transfers');
+      throw new InternalServerErrorException(
+        'Failed to load processing transfers',
+      );
     }
 
     const transfers = (data ?? []) as TransferRecord[];
@@ -469,9 +475,7 @@ export class TransfersService {
           reconcileError instanceof Error
             ? reconcileError.message
             : 'Failed to reconcile merchant transfers';
-        this.logger.warn(
-          `Reconcile skipped for user ${userId}: ${message}`,
-        );
+        this.logger.warn(`Reconcile skipped for user ${userId}: ${message}`);
       }
     }
 
@@ -493,6 +497,78 @@ export class TransfersService {
       stillProcessing,
       transfers: updatedTransfers,
     };
+  }
+
+  async handleEscrowPayoutWebhook(
+    raw: Record<string, unknown>,
+  ): Promise<{ outcome: string }> {
+    const payoutRef = this.pickWebhookString(raw, 'payout_ref');
+
+    if (!payoutRef) {
+      return { outcome: 'ignored_no_payout_ref' };
+    }
+
+    const transfer = await this.fetchTransferByPayoutRef(payoutRef);
+
+    if (!transfer) {
+      return { outcome: 'transfer_not_found' };
+    }
+
+    if (transfer.status !== 'PROCESSING') {
+      if (transfer.status === 'SUCCESS' || transfer.status === 'FAILED') {
+        return { outcome: 'already_final' };
+      }
+
+      return { outcome: `ignored_status_${transfer.status}` };
+    }
+
+    const entry = {
+      status: this.pickWebhookString(raw, 'status') ?? '',
+      utr:
+        this.pickWebhookString(raw, 'bankref') ??
+        this.pickWebhookString(raw, 'utr') ??
+        undefined,
+      bank_ref: this.pickWebhookString(raw, 'bankref') ?? undefined,
+      raw,
+    };
+
+    const applied = await this.applyPayoutStatusUpdate(transfer, entry);
+
+    return { outcome: applied ? 'updated' : 'no_change' };
+  }
+
+  private async fetchTransferByPayoutRef(
+    payoutRef: string,
+  ): Promise<TransferRecord | null> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('transfers')
+      .select('*')
+      .eq('payout_ref', payoutRef)
+      .maybeSingle();
+
+    if (error) {
+      throw new InternalServerErrorException('Failed to load transfer');
+    }
+
+    return data ? (data as TransferRecord) : null;
+  }
+
+  private pickWebhookString(
+    raw: Record<string, unknown>,
+    key: string,
+  ): string | null {
+    const value = raw[key];
+
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+
+    return null;
   }
 
   private async applyPayoutStatusUpdate(
@@ -531,7 +607,9 @@ export class TransfersService {
         return null;
       }
 
-      return this.toPublicTransfer(await this.fetchTransferRowById(transfer.id));
+      return this.toPublicTransfer(
+        await this.fetchTransferRowById(transfer.id),
+      );
     }
 
     if (mappedStatus === 'SUCCESS') {
@@ -652,11 +730,7 @@ export class TransfersService {
     ledger: { userRef?: string | null; merchantName?: string | null },
     portalUsername?: string | null,
   ): { userRef: string; userName: string } | null {
-    const candidates = [
-      ledger.userRef,
-      portalUsername,
-      ledger.merchantName,
-    ]
+    const candidates = [ledger.userRef, portalUsername, ledger.merchantName]
       .map((value) => value?.trim())
       .filter((value): value is string => !!value);
 
@@ -677,7 +751,8 @@ export class TransfersService {
     userRef: string;
     userName: string;
   } {
-    const jwtName = this.escrowStackService.decodeMerchantNameFromApiKey(apiKey);
+    const jwtName =
+      this.escrowStackService.decodeMerchantNameFromApiKey(apiKey);
 
     const candidates = [
       ledger.userRef,
@@ -758,8 +833,7 @@ export class TransfersService {
     const normalized = message.toLowerCase();
 
     return (
-      normalized.includes('batch_id') ||
-      normalized.includes('transfer_batches')
+      normalized.includes('batch_id') || normalized.includes('transfer_batches')
     );
   }
 
@@ -768,9 +842,7 @@ export class TransfersService {
   }
 
   private async fetchTransferRows(
-    run: (
-      select: string,
-    ) => PromiseLike<{
+    run: (select: string) => PromiseLike<{
       data: unknown[] | null;
       error: { message: string } | null;
     }>,
@@ -790,7 +862,9 @@ export class TransfersService {
     throw new InternalServerErrorException('Failed to load transfers');
   }
 
-  private async fetchTransferRowById(transferId: string): Promise<TransferRecord> {
+  private async fetchTransferRowById(
+    transferId: string,
+  ): Promise<TransferRecord> {
     for (const select of this.transferSelectCandidates()) {
       const { data, error } = await this.supabaseService
         .getAdminClient()
@@ -813,7 +887,9 @@ export class TransfersService {
 
   private validateTransferRules(input: CreateTransferInput): void {
     if (input.payoutMode === 'RTGS' && input.amount < 200_000) {
-      throw new BadRequestException('RTGS transfers require a minimum of ₹2,00,000');
+      throw new BadRequestException(
+        'RTGS transfers require a minimum of ₹2,00,000',
+      );
     }
 
     if (input.payoutMode === 'UPI') {

@@ -38,7 +38,7 @@ export class UsersService {
       throw new InternalServerErrorException('Failed to look up user');
     }
 
-    return data as PublicUser | null;
+    return data;
   }
 
   async findAll(): Promise<UserListItem[]> {
@@ -52,7 +52,7 @@ export class UsersService {
       throw new InternalServerErrorException('Failed to list users');
     }
 
-    return (data ?? []) as UserListItem[];
+    return data ?? [];
   }
 
   async updateUsername(id: string, username: string): Promise<UserListItem> {
@@ -76,7 +76,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    return data as UserListItem;
+    return data;
   }
 
   async updatePassword(id: string, password: string): Promise<UserListItem> {
@@ -96,7 +96,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    return data as UserListItem;
+    return data;
   }
 
   async delete(id: string): Promise<{ id: string }> {
@@ -135,6 +135,6 @@ export class UsersService {
       throw new InternalServerErrorException('Failed to create user');
     }
 
-    return data as UserListItem;
+    return data;
   }
 }

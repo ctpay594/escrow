@@ -21,7 +21,7 @@ Custom **B2B Payout and Ledger Management Platform** (closed-loop treasury, not 
 ## Security (non-negotiable)
 
 - **Never** expose EscrowStack API keys, RSA private keys, or crypto to frontends
-- Per-merchant RSA keys: generated on user create, AES-256 encrypted at rest in DB, decrypted in-memory only for signing
+- **One company** EscrowStack JWT + RSA private key in backend `.env` (`ESCROWSTACK_API_KEY`, `ESCROWSTACK_PRIVATE_KEY`) for all merchants
 - Payout signing: RSA-SHA256 on unsigned JSON payload + `timestamp` (IST), then attach `signature`
 - User/admin portal auth JWTs are separate from EscrowStack credentials
 
@@ -31,11 +31,11 @@ Custom **B2B Payout and Ledger Management Platform** (closed-loop treasury, not 
 - `payout.cts.txt` — Node signing + payout flow (RSA-SHA256, IST timestamp)
 - `EStack-ESCROW-HDFC Chakrathalwar.postman_collection (1).json` — full Postman collection
 
-**Key endpoints:**
-- Balance: `POST /v1/escrow/fetch_transaction_account_balance` (base: `casesdf.escrowstack.io`)
-- Payout: `POST https://payoutesfc.escrowstack.io/payout/v1/prod` (IMPS/NEFT/RTGS/UPI)
-- Payout status: `POST /v1/escrow/get_payout_status`
-- Webhooks: register via `/v1/escrow/update_webhook_endpoint_url`
+**Key endpoints (live passthrough):**
+- Balance: `POST /v1/pt/hdfc/get_account_balance` (base: `cashdfcpt.escrowstack.io`)
+- Payout: `POST /v1/pt/hdfc/payout`
+- Payout status: `POST /v1/pt/hdfc/get_payout_status`
+- Webhooks: `POST https://api.ctpay.tech/webhooks/escrowstack` (logs `callbacks`; ledger credit TBD)
 
 **Payout payload:** `payouts[]` (payout_ref, amount, payout_mode, payee, beneficiary) + `timestamp` + `signature`. Header: `apikey` (JWT).
 
@@ -52,13 +52,13 @@ Custom **B2B Payout and Ledger Management Platform** (closed-loop treasury, not 
 ### Payout (outbound — pending trick)
 1. Merchant requests transfer on user portal
 2. Backend: deduct `available_balance`, add `pending_balance`, status `PENDING_APPROVAL`
-3. Admin approves → backend decrypts keys, signs, POST to EscrowStack → `PROCESSING`
+3. Admin approves → backend signs with platform key from `.env`, POST to EscrowStack → `PROCESSING`
 4. Webhook success → `SUCCESS`, remove from `pending_balance`
 5. Webhook failure → `FAILED`, return funds to `available_balance`
 
 ## Database schema (planned)
 
-**merchants** (extends users): login, `virtual_account_no`, `escrow_ifsc`, `api_key`, `encrypted_private_key`, `available_balance`, `pending_balance`
+**merchants** (extends users): login, `virtual_account_no`, `escrow_ifsc`, `available_balance`, `pending_balance` — EscrowStack keys in `.env` not in this table
 
 **transfers:** `merchant_id`, `amount`, beneficiary fields, `status` (`PENDING_APPROVAL` | `PROCESSING` | `SUCCESS` | `FAILED` | `REJECTED`)
 
@@ -77,7 +77,7 @@ Custom **B2B Payout and Ledger Management Platform** (closed-loop treasury, not 
 - [ ] Step 9: CRON reconciliation — hourly Supabase vs bank balance
 - [ ] Step 10: Production deploy — Vercel + Hostinger VPS
 
-**Current position: Steps 6 & 9–10 remaining (webhooks, CRON, production deploy).**
+**Current position: Step 6 remaining (credit merchant from collect webhook). CRON still planned. Production already hosted.**
 
 ## Dev ports
 

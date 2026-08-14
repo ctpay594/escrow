@@ -34,6 +34,7 @@ Merchants use the **user portal** to view balance, load funds, and request payou
 - `payout.cts.txt` — Node RSA-SHA256 signing + payout flow (IST timestamp)
 - `EStack-ESCROW-HDFC Chakrathalwar.postman_collection (1).json` — full EscrowStack API collection
 - `Readme.md` — quick start and commands
+- `MAC.md` — clone and run on a Mac (after leaving Windows)
 - `DEPLOYMENT.md` — production hosting (Vercel + VPS + DNS + updates)
 - `.cursorrules` — Cursor agent rules for this repo
 
@@ -59,7 +60,7 @@ flowchart TB
   AP -->|Admin JWT cookie via BFF routes| BE
   BE --> DB
   BE -->|Balance / payout / status| ES
-  ES -->|Webhooks planned| BE
+  ES -->|POST /webhooks/escrowstack → callbacks| BE
 ```
 
 Both frontends are **Next.js** apps that call the backend through **same-origin API routes** (`apps/*/src/app/api/...`). They never receive EscrowStack credentials.
@@ -68,14 +69,14 @@ Both frontends are **Next.js** apps that call the backend through **same-origin 
 
 ## Database (Supabase)
 
-Run migrations **in order** (`001` … `011`).
+Run migrations **in order** (`001` … `016`). Local Mac setup: [`MAC.md`](MAC.md).
 
 | Migration | Purpose |
 |-----------|---------|
 | `001_create_users` | Merchant login users |
 | `002_create_admins` | Admin accounts |
 | `003_users_plain_password` | Merchant passwords stored plain (admin-visible) |
-| `004_create_merchants` | EscrowStack credentials, virtual account, encrypted keys |
+| `004_create_merchants` | Merchant profile, virtual account (legacy encrypted key columns) |
 | `005_merchant_real_demo_balance` | `real_balance`, `demo_balance` columns |
 | `006_create_transfers` | Payout requests + status lifecycle |
 | `007_transfer_utr` | UTR / bank ref on transfers |
@@ -83,6 +84,10 @@ Run migrations **in order** (`001` … `011`).
 | `009_transfer_batches` | Bulk upload batch grouping |
 | `010_merchant_account_status` | `active` \| `on_hold` \| `terminated` |
 | `011_admins_plain_password` | Admin passwords stored plain (like merchants) |
+| `012`–`013` | Webhook event tables (older audit) |
+| `014_simple_callbacks` | `callbacks` table — raw EscrowStack POSTs |
+| `015_merchant_virtual_account_unique` | Unique `virtual_account_no` |
+| `016_drop_merchant_encrypted_keys` | Keys live in backend `.env`, not per merchant |
 
 ### Core tables (conceptual)
 
@@ -92,10 +97,11 @@ Run migrations **in order** (`001` … `011`).
 
 **`merchants`** (extends user):
 
-- EscrowStack: `api_key`, `encrypted_private_key`, `virtual_account_no`, `escrow_ifsc`
+- Bank: `virtual_account_no` (`CHAK69` + 6 digits), `escrow_ifsc` (shared `HDFC0000060`)
 - Ledger: `real_balance`, `demo_balance`, `pending_balance`
 - Display: `balance_mode` (`real` \| `demo`)
 - Access: `account_status` (`active` \| `on_hold` \| `terminated`)
+- Company EscrowStack JWT + RSA private key: **backend `.env` only** (not in this table)
 
 **`transfers`**:
 
@@ -111,7 +117,7 @@ Run migrations **in order** (`001` … `011`).
 ### 1. Inbound deposit (whitelisted)
 
 1. Known customer sends IMPS/NEFT/RTGS to merchant **virtual account**
-2. EscrowStack webhook → backend (planned) credits `real_balance`
+2. EscrowStack POST → `POST /webhooks/escrowstack` logs `callbacks`; auto-credit of `real_balance` by virtual account is **not wired yet**
 3. Admin may refresh **real (bank)** balance from EscrowStack API
 4. User portal shows **available** balance per `balance_mode` (real or demo)
 
@@ -124,7 +130,7 @@ This is the core ledger pattern:
 | 1 | Merchant | Submits transfer on user portal |
 | 2 | Backend | Deducts **available**, adds **pending_balance**, creates transfer `PENDING_APPROVAL` |
 | 3 | Admin | Approves or rejects on admin portal |
-| 4a | Approve | Backend decrypts RSA key, signs payload, POST to EscrowStack → `PROCESSING` |
+| 4a | Approve | Backend signs with **platform** RSA key from `.env`, POST to EscrowStack → `PROCESSING` |
 | 4b | Reject | Status `REJECTED`, funds returned to available |
 | 5 | Bank / webhook | Success → `SUCCESS`, remove from pending; failure → `FAILED`, refund available |
 
@@ -161,16 +167,13 @@ When not `active`:
 
 - Balance: `POST /v1/pt/hdfc/get_account_balance` (base: `cashdfcpt.escrowstack.io`)
 - Payout: `POST /v1/pt/hdfc/payout`
-- Payout status: `POST /v1/pt/hdfc/get_payout_status`
-- Payout: `POST` payout prod URL with signed JSON
-- Payout status: `POST /v1/escrow/get_payout_status`
+- Payout status: `POST /v1/pt/hdfc/get_payout_status` (confirm path vs old `/v1/escrow/get_payout_status`)
 - Signing: RSA-SHA256 on unsigned JSON + `timestamp` (IST), then attach `signature`; header `apikey`
 
 **Security:**
 
-- Per-merchant RSA keys generated on create, **AES-256 encrypted at rest**
-- Decrypted in memory only when approving a payout
-- Never expose keys, API secrets, or signing logic to frontends
+- **One** company API key + RSA private key in `ESCROWSTACK_API_KEY` / `ESCROWSTACK_PRIVATE_KEY`
+- Never expose keys, API secrets, or signing logic to frontends (not on Vercel)
 
 **Payout lifecycle (EscrowStack):**
 
@@ -209,8 +212,7 @@ Base URL: `http://localhost:3000` (dev)
 ### Admin merchants (`/admin/users`) — admin JWT
 
 - `GET /admin/users` — list merchants with balances
-- `POST /admin/users/fetch-escrow-details` — validate API key + keypair before onboard
-- `POST /admin/users` — create merchant (encrypt keys, create user)
+- `POST /admin/users` — create merchant (auto VA + IFSC; portal username/password from admin UI)
 - `PATCH /admin/users/:id` — username, password, demo balance, balance_mode, account_status
 - `POST /admin/users/:id/refresh-balance` — fetch real balance from EscrowStack
 - `DELETE /admin/users/:id`
@@ -241,7 +243,7 @@ Transfers are managed **per merchant** on the detail page (not a separate global
 
 ### Key features
 
-- Onboard merchant: fetch EscrowStack details → create user + encrypted credentials
+- Onboard merchant: **Add merchant** → name → generated username/password → auto VA/IFSC
 - Glass **iOS-style segmented controls**: portal status (Active / On hold / Terminated), CTPay balance mode (Real / Demo)
 - Approve/reject transfers with confirm dialog
 - Yes/No confirm dialogs for status changes, deletes, batch approve, and other sensitive actions
@@ -301,7 +303,7 @@ Same glass design language as admin (`glass-styles.ts`, `GlassCard`, frosted dia
 
 ## Security rules (non-negotiable)
 
-1. **Never** put EscrowStack API keys, RSA private keys, or AES master key in frontends or git
+1. **Never** put EscrowStack API keys or RSA private keys in frontends or git
 2. Separate JWT secrets: `JWT_SECRET` (users) vs `ADMIN_JWT_SECRET` (admins)
 3. Merchant passwords: plain in DB (admin-managed visibility)
 4. Admin passwords: plain in DB (editable in Supabase table editor) — migration `011`; treat DB access as full admin access
@@ -347,6 +349,8 @@ INSERT INTO public.admins (username, password) VALUES ('admin', 'strong-password
 
 ## Local development
 
+**Mac (after Windows):** follow [`MAC.md`](MAC.md).
+
 ```bash
 pnpm install
 pnpm dev:backend   # :3000
@@ -354,9 +358,9 @@ pnpm dev:user      # :3001
 pnpm dev:admin     # :3002
 ```
 
-Copy `apps/backend/.env.example` → `.env` and set Supabase, JWT, EscrowStack, `ESCROW_AES_MASTER_KEY`, `CORS_ORIGIN`.
+Copy `apps/backend/.env.example` → `apps/backend/.env` and set Supabase, JWT, EscrowStack (`ESCROWSTACK_API_KEY`, `ESCROWSTACK_PRIVATE_KEY`), `CORS_ORIGIN`. Frontends need no `.env` locally.
 
-Create admin in Supabase `admins` table (see above). See `Readme.md` for full migration list.
+Create admin in Supabase `admins` table (see above). Run migrations `001`–`016`.
 
 ---
 

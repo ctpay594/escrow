@@ -19,7 +19,6 @@ import { CurrentAdmin } from './current-admin.decorator';
 import { AdminLoginDto } from './dto/admin-login.dto';
 import {
   CreateManagedUserDto,
-  FetchEscrowDetailsDto,
   ResetManagedPasswordDto,
   UpdateDemoBalanceDto,
   UpdateBalanceModeDto,
@@ -57,11 +56,6 @@ export class AdminUsersController {
   @Get()
   listUsers() {
     return this.adminUsersService.listUsers();
-  }
-
-  @Post('fetch-escrow-details')
-  fetchEscrowDetails(@Body() dto: FetchEscrowDetailsDto) {
-    return this.adminUsersService.fetchEscrowDetails(dto);
   }
 
   @Post()

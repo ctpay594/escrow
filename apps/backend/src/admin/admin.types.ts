@@ -11,9 +11,3 @@ export interface AdminAuthResponse {
   };
   accessToken: string;
 }
-
-export interface EscrowMerchantPreview {
-  virtual_account_no: string | null;
-  escrow_ifsc: string | null;
-  real_balance: number;
-}

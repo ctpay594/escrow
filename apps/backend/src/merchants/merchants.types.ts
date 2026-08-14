@@ -5,8 +5,6 @@ export interface MerchantRecord {
   user_ref: string | null;
   virtual_account_no: string | null;
   escrow_ifsc: string | null;
-  encrypted_api_key: string;
-  encrypted_private_key: string;
   available_balance: number;
   real_balance: number;
   demo_balance: number;
@@ -60,8 +58,6 @@ export interface AdminMerchantListItem {
 export interface CreateMerchantInput {
   userId: string;
   merchantName: string;
-  apiKey: string;
-  privateKey: string;
   userRef?: string;
   virtualAccountNo?: string;
   escrowIfsc?: string;

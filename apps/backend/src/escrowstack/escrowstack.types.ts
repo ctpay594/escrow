@@ -5,15 +5,6 @@ export interface EscrowBalanceResult {
   raw: Record<string, unknown>;
 }
 
-export interface EscrowAccountDetailsResult {
-  merchantName?: string;
-  userRef?: string;
-  virtualAccountNo?: string;
-  escrowIfsc?: string;
-  loadInstructions?: Record<string, string[]>;
-  raw: Record<string, unknown>;
-}
-
 export interface PayoutBeneficiary {
   account_name: string;
   account_no?: string;

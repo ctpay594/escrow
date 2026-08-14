@@ -4,72 +4,123 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { CryptoService } from '../crypto';
+import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase';
 import type {
   AdminMerchantListItem,
   CreateMerchantInput,
   MerchantAccountStatus,
   MerchantProfileRow,
-  MerchantRecord,
   PublicMerchantProfile,
 } from './merchants.types';
 
 const MERCHANT_PROFILE_SELECT =
-  'merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, escrow_account_details';
+  'merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, real_balance, demo_balance, balance_mode, account_status, escrow_account_details';
 
 @Injectable()
 export class MerchantsService {
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly cryptoService: CryptoService,
+    private readonly configService: ConfigService,
   ) {}
 
+  getPlatformCredentials(): { apiKey: string; privateKey: string } {
+    const apiKey = this.configService.get<string>('ESCROWSTACK_API_KEY')?.trim();
+    const privateKeyRaw = this.configService.get<string>(
+      'ESCROWSTACK_PRIVATE_KEY',
+    );
+
+    if (!apiKey || !privateKeyRaw?.trim()) {
+      throw new InternalServerErrorException(
+        'Set ESCROWSTACK_API_KEY and ESCROWSTACK_PRIVATE_KEY in backend .env',
+      );
+    }
+
+    return {
+      apiKey,
+      privateKey: privateKeyRaw.replace(/\\n/g, '\n').trim(),
+    };
+  }
+
+  getSharedIfsc(): string {
+    return (
+      this.configService.get<string>('ESCROWSTACK_IFSC')?.trim() ||
+      'HDFC0000060'
+    );
+  }
+
+  getVaPrefix(): string {
+    return (
+      this.configService.get<string>('ESCROWSTACK_VA_PREFIX')?.trim() ||
+      'CHAK69'
+    );
+  }
+
+  async allocateVirtualAccount(): Promise<string> {
+    const prefix = this.getVaPrefix();
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('merchants')
+      .select('virtual_account_no')
+      .like('virtual_account_no', `${prefix}%`);
+
+    if (error) {
+      throw new InternalServerErrorException(
+        'Failed to allocate virtual account',
+      );
+    }
+
+    const used = new Set(
+      (data ?? [])
+        .map((row) => row.virtual_account_no as string | null)
+        .filter((value): value is string => !!value),
+    );
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(
+        6,
+        '0',
+      );
+      const virtualAccountNo = `${prefix}${suffix}`;
+
+      if (!used.has(virtualAccountNo)) {
+        return virtualAccountNo;
+      }
+    }
+
+    throw new InternalServerErrorException(
+      'Could not allocate a unique virtual account',
+    );
+  }
+
   async create(input: CreateMerchantInput): Promise<PublicMerchantProfile> {
-    const basePayload = {
+    const payload = {
       user_id: input.userId,
       merchant_name: input.merchantName,
       user_ref: input.userRef ?? null,
       virtual_account_no: input.virtualAccountNo ?? null,
       escrow_ifsc: input.escrowIfsc ?? null,
-      encrypted_api_key: this.cryptoService.encrypt(input.apiKey),
-      encrypted_private_key: this.cryptoService.encrypt(input.privateKey),
       available_balance: input.demoBalance,
       pending_balance: 0,
+      real_balance: input.realBalance,
+      demo_balance: input.demoBalance,
       escrow_account_details: input.escrowAccountDetails,
     };
 
-    const fullPayload = {
-      ...basePayload,
-      real_balance: input.realBalance,
-      demo_balance: input.demoBalance,
-    };
-
-    let { data, error } = await this.supabaseService
+    const { data, error } = await this.supabaseService
       .getAdminClient()
       .from('merchants')
-      .insert(fullPayload)
+      .insert(payload)
       .select(MERCHANT_PROFILE_SELECT)
       .single();
 
-    if (error && this.isMissingBalanceColumnError(error.message)) {
-      ({ data, error } = await this.supabaseService
-        .getAdminClient()
-        .from('merchants')
-        .insert(basePayload)
-        .select(MERCHANT_PROFILE_SELECT)
-        .single());
-    }
-
     if (error || !data) {
       throw new InternalServerErrorException(
-        error && this.isMissingBalanceColumnError(error.message)
-          ? this.migrationRequiredMessage()
-          : 'Failed to create merchant profile',
+        error?.message ?? 'Failed to create merchant profile',
       );
     }
 
-    return this.toPublicProfile(data);
+    return this.toPublicProfile(data as MerchantProfileRow);
   }
 
   async findPublicProfileByUserId(
@@ -95,20 +146,27 @@ export class MerchantsService {
     }
 
     const profile = this.toPublicProfile(data);
-    const balanceMap = await this.loadBalanceMapByUserIds([userId]);
-    const balances = balanceMap.get(userId);
+    const realBalance = Number(
+      (data as { real_balance?: unknown }).real_balance ??
+        profile.available_balance,
+    );
+    const demoBalance = Number(
+      (data as { demo_balance?: unknown }).demo_balance ??
+        profile.available_balance,
+    );
+    const balanceMode = this.readBalanceMode(
+      data as Record<string, unknown>,
+    );
 
-    if (balances) {
-      profile.available_balance = this.resolveAvailableBalance(
-        balances.real_balance,
-        balances.demo_balance,
-        profile.pending_balance,
-        balances.balance_mode,
-      );
-      profile.account_status = balances.account_status;
-    } else {
-      profile.account_status = 'active';
-    }
+    profile.available_balance = this.resolveAvailableBalance(
+      realBalance,
+      demoBalance,
+      profile.pending_balance,
+      balanceMode,
+    );
+    profile.account_status = this.readAccountStatus(
+      data as Record<string, unknown>,
+    );
 
     return profile;
   }
@@ -144,40 +202,69 @@ export class MerchantsService {
   }
 
   async findAllForAdmin(): Promise<AdminMerchantListItem[]> {
-    const { data, error } = await this.supabaseService
-      .getAdminClient()
+    const client = this.supabaseService.getAdminClient();
+    const { data: users, error: usersError } = await client
       .from('users')
-      .select(
-        `
-        id,
-        username,
-        password,
-        created_at,
-        updated_at,
-        merchants (
-          merchant_name,
-          user_ref,
-          virtual_account_no,
-          escrow_ifsc,
-          available_balance,
-          pending_balance
-        )
-      `,
-      )
+      .select('id, username, password, created_at, updated_at')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      throw new InternalServerErrorException('Failed to list merchants');
+    if (usersError) {
+      throw new InternalServerErrorException(
+        usersError.message ?? 'Failed to list merchants',
+      );
     }
 
-    const userIds = (data ?? []).map((row) => row.id as string);
-    const balanceMap = await this.loadBalanceMapByUserIds(userIds);
+    const userRows = users ?? [];
+    const userIds = userRows.map((row) => row.id as string);
+    const merchantByUserId = new Map<string, Record<string, unknown>>();
 
-    return (data ?? []).map((row) => {
-      const merchant = Array.isArray(row.merchants)
-        ? row.merchants[0]
-        : row.merchants;
-      const balances = balanceMap.get(row.id as string);
+    if (userIds.length > 0) {
+      const fullSelect =
+        'user_id, merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, real_balance, demo_balance, balance_mode, account_status';
+      const basicSelect =
+        'user_id, merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance';
+
+      let merchantsQuery = await client
+        .from('merchants')
+        .select(fullSelect)
+        .in('user_id', userIds);
+
+      if (
+        merchantsQuery.error &&
+        this.isMissingBalanceColumnError(merchantsQuery.error.message)
+      ) {
+        merchantsQuery = await client
+          .from('merchants')
+          .select(basicSelect)
+          .in('user_id', userIds);
+      }
+
+      if (merchantsQuery.error) {
+        throw new InternalServerErrorException(
+          merchantsQuery.error.message ?? 'Failed to list merchants',
+        );
+      }
+
+      for (const merchant of merchantsQuery.data ?? []) {
+        merchantByUserId.set(
+          merchant.user_id as string,
+          merchant as Record<string, unknown>,
+        );
+      }
+    }
+
+    return userRows.map((row) => {
+      const merchant = merchantByUserId.get(row.id as string);
+      const realBalance = Number(
+        merchant?.real_balance ?? merchant?.available_balance ?? 0,
+      );
+      const demoBalance = Number(
+        merchant?.demo_balance ?? merchant?.available_balance ?? 0,
+      );
+      const pendingBalance = Number(merchant?.pending_balance ?? 0);
+      const balanceMode =
+        merchant?.balance_mode === 'real' ? 'real' : 'demo';
+      const accountStatus = this.readAccountStatus(merchant ?? {});
 
       return {
         id: row.id as string,
@@ -189,18 +276,16 @@ export class MerchantsService {
           (merchant?.virtual_account_no as string | null) ?? null,
         escrow_ifsc: (merchant?.escrow_ifsc as string | null) ?? null,
         available_balance: this.resolveAvailableBalance(
-          balances?.real_balance ?? Number(merchant?.available_balance ?? 0),
-          balances?.demo_balance ?? Number(merchant?.available_balance ?? 0),
-          Number(merchant?.pending_balance ?? 0),
-          balances?.balance_mode ?? 'demo',
+          realBalance,
+          demoBalance,
+          pendingBalance,
+          balanceMode,
         ),
-        real_balance:
-          balances?.real_balance ?? Number(merchant?.available_balance ?? 0),
-        demo_balance:
-          balances?.demo_balance ?? Number(merchant?.available_balance ?? 0),
-        pending_balance: Number(merchant?.pending_balance ?? 0),
-        balance_mode: balances?.balance_mode ?? 'demo',
-        account_status: balances?.account_status ?? 'active',
+        real_balance: realBalance,
+        demo_balance: demoBalance,
+        pending_balance: pendingBalance,
+        balance_mode: balanceMode,
+        account_status: accountStatus,
         created_at: row.created_at as string,
         updated_at: row.updated_at as string,
       };
@@ -791,10 +876,6 @@ export class MerchantsService {
       },
     };
 
-    if (meta?.accountNo) {
-      payload.virtual_account_no = meta.accountNo;
-    }
-
     if (balanceMode === 'real') {
       payload.available_balance = this.resolveAvailableBalance(
         realBalance,
@@ -953,47 +1034,15 @@ export class MerchantsService {
     }
   }
 
-  async getApiKeyByUserId(userId: string): Promise<string> {
-    const { data, error } = await this.supabaseService
-      .getAdminClient()
-      .from('merchants')
-      .select('encrypted_api_key')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (error || !data) {
-      throw new NotFoundException('Merchant API key not found');
-    }
-
-    return this.cryptoService.decrypt(
-      (data as Pick<MerchantRecord, 'encrypted_api_key'>).encrypted_api_key,
-    );
+  async getApiKeyByUserId(_userId: string): Promise<string> {
+    return this.getPlatformCredentials().apiKey;
   }
 
-  async getDecryptedCredentials(userId: string): Promise<{
+  async getDecryptedCredentials(_userId: string): Promise<{
     apiKey: string;
     privateKey: string;
   }> {
-    const { data, error } = await this.supabaseService
-      .getAdminClient()
-      .from('merchants')
-      .select('encrypted_api_key, encrypted_private_key')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (error || !data) {
-      throw new NotFoundException('Merchant credentials not found');
-    }
-
-    const record = data as Pick<
-      MerchantRecord,
-      'encrypted_api_key' | 'encrypted_private_key'
-    >;
-
-    return {
-      apiKey: this.cryptoService.decrypt(record.encrypted_api_key),
-      privateKey: this.cryptoService.decrypt(record.encrypted_private_key),
-    };
+    return this.getPlatformCredentials();
   }
 
   private toPublicProfile(data: MerchantProfileRow): PublicMerchantProfile {

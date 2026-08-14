@@ -7,16 +7,6 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class FetchEscrowDetailsDto {
-  @IsString()
-  @MinLength(20)
-  escrow_api_key!: string;
-
-  @IsString()
-  @MinLength(20)
-  escrow_private_key!: string;
-}
-
 export class CreateManagedUserDto {
   @IsString()
   @MinLength(3)
@@ -29,14 +19,6 @@ export class CreateManagedUserDto {
   @IsString()
   @MinLength(2)
   merchant_name!: string;
-
-  @IsString()
-  @MinLength(20)
-  escrow_api_key!: string;
-
-  @IsString()
-  @MinLength(20)
-  escrow_private_key!: string;
 
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })

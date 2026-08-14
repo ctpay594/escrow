@@ -2,7 +2,6 @@ import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { getIndianPayoutTimestamp, signPayoutPayload } from './payout-signing';
 import type {
-  EscrowAccountDetailsResult,
   EscrowBalanceResult,
   PayoutItem,
   PayoutStatusEntry,
@@ -61,82 +60,6 @@ export class EscrowStackService {
       customerId,
       raw: response,
     };
-  }
-
-  async fetchLoadAccountDetails(
-    apiKey: string,
-  ): Promise<EscrowAccountDetailsResult> {
-    const response = await this.post(
-      apiKey,
-      '/v1/account/fetch_load_account_details',
-      {},
-    );
-
-    return {
-      merchantName: this.pickString(response, [
-        'data.merchant_name',
-        'data.account_name',
-        'data.name',
-        'merchant_name',
-        'account_name',
-        'name',
-      ]),
-      userRef: this.pickString(response, [
-        'data.user_ref',
-        'data.userRef',
-        'user_ref',
-      ]),
-      virtualAccountNo: this.pickString(response, [
-        'data.AC_NO',
-        'data.ac_no',
-        'data.virtual_account_no',
-        'data.virtual_account_number',
-        'data.account_no',
-        'data.va_number',
-        'virtual_account_no',
-        'account_no',
-      ]),
-      escrowIfsc: this.pickString(response, [
-        'data.IFSC',
-        'data.ifsc',
-        'data.escrow_ifsc',
-        'data.ifsc_code',
-        'ifsc',
-        'escrow_ifsc',
-      ]),
-      loadInstructions: this.extractLoadInstructions(response),
-      raw: response,
-    };
-  }
-
-  private extractLoadInstructions(
-    response: Record<string, unknown>,
-  ): Record<string, string[]> | undefined {
-    const data = response.data;
-
-    if (typeof data !== 'object' || data === null) {
-      return undefined;
-    }
-
-    const instructions = (data as { Instructions?: unknown }).Instructions;
-
-    if (typeof instructions !== 'object' || instructions === null) {
-      return undefined;
-    }
-
-    const parsed: Record<string, string[]> = {};
-
-    for (const [key, value] of Object.entries(
-      instructions as Record<string, unknown>,
-    )) {
-      if (Array.isArray(value)) {
-        parsed[key.trim()] = value.filter(
-          (item): item is string => typeof item === 'string',
-        );
-      }
-    }
-
-    return Object.keys(parsed).length > 0 ? parsed : undefined;
   }
 
   async submitPayout(

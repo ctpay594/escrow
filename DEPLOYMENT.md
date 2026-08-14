@@ -2,6 +2,8 @@
 
 How to host the full stack: **Vercel** (user + admin portals) + **Hostinger VPS** (backend API) + **Supabase** (database).
 
+For **local run on a Mac**, use [`MAC.md`](MAC.md) instead of this file.
+
 **Production URLs (example):**
 
 | App | URL |
@@ -42,7 +44,9 @@ Browsers only talk to Vercel. Vercel server routes call the backend using `API_U
 1. Create a Supabase project.
 2. Open **SQL Editor** and run migrations **in order** from `apps/backend/supabase/migrations/`:
 
-   `001` → `002` → `003` → `004` → `005` → `006` → `007` → `008` → `009` → `010` → `011`
+   `001` → `002` → `003` → `004` → `005` → `006` → `007` → `008` → `009` → `010` → `011` → `012` → `013` → `014` → `015` → `016`
+
+   **016** is required: platform EscrowStack keys live in VPS `.env`, not merchant rows.
 
 3. Copy from **Project Settings → API**:
    - `SUPABASE_URL`
@@ -87,13 +91,8 @@ To reset a password later, edit the row in Supabase.
 - Do **not** point `@` or `www` to the VPS — you will see nginx 404 or backend “Hello World”.
 - Wait 15–60 minutes after DNS changes for propagation.
 
-Verify:
-
-```powershell
-nslookup ctpay.tech
-nslookup www.ctpay.tech
-nslookup api.ctpay.tech
-```
+Verify (Windows PowerShell): `nslookup ctpay.tech`  
+On Mac: `dig ctpay.tech +short` or `nslookup ctpay.tech`
 
 ---
 
@@ -137,6 +136,10 @@ ADMIN_JWT_EXPIRES_IN_SECONDS=604800
 
 ESCROWSTACK_BASE_URL=https://cashdfcpt.escrowstack.io
 ESCROWSTACK_PAYOUT_URL=https://cashdfcpt.escrowstack.io/v1/pt/hdfc/payout
+ESCROWSTACK_API_KEY=paste-live-jwt-here
+ESCROWSTACK_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nPASTE_FULL_KEY_HERE\n-----END PRIVATE KEY-----"
+ESCROWSTACK_IFSC=HDFC0000060
+ESCROWSTACK_VA_PREFIX=CHAK69
 ESCROW_AES_MASTER_KEY=your-aes-master-key
 
 SUPABASE_URL=https://YOUR-PROJECT.supabase.co

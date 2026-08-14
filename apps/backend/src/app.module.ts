@@ -4,7 +4,6 @@ import { AdminModule } from './admin';
 import { AuthModule } from './auth';
 import { TransfersModule } from './transfers';
 import { WebhooksModule } from './webhooks';
-import { CryptoModule } from './crypto';
 import { HealthModule } from './health';
 import { SupabaseModule } from './supabase';
 
@@ -15,7 +14,6 @@ import { SupabaseModule } from './supabase';
       envFilePath: '.env',
     }),
     SupabaseModule,
-    CryptoModule,
     HealthModule,
     AuthModule,
     TransfersModule,

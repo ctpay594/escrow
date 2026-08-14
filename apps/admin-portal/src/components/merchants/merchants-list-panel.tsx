@@ -31,6 +31,8 @@ interface ManagedMerchant {
   id: string;
   username: string;
   merchant_name: string;
+  virtual_account_no?: string | null;
+  escrow_ifsc?: string | null;
   available_balance: number;
   real_balance: number;
   demo_balance: number;
@@ -39,10 +41,26 @@ interface ManagedMerchant {
   account_status?: 'active' | 'on_hold' | 'terminated';
 }
 
-interface EscrowPreview {
-  virtual_account_no: string | null;
-  escrow_ifsc: string | null;
-  real_balance: number;
+function generateUsernameFromName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 12);
+  const suffix = String(Math.floor(100 + Math.random() * 900));
+  const base = slug.length >= 3 ? slug : `user${suffix}`;
+
+  return `${base}${suffix}`.slice(0, 20);
+}
+
+function generatePassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let value = '';
+
+  for (let i = 0; i < 10; i += 1) {
+    value += chars[Math.floor(Math.random() * chars.length)];
+  }
+
+  return value;
 }
 
 function redirectToLoginIfUnauthorized(response: Response): boolean {
@@ -62,16 +80,17 @@ export function MerchantsListPanel() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [onboardingOpen, setOnboardingOpen] = useState(false);
-
-  const [escrowApiKey, setEscrowApiKey] = useState('');
-  const [escrowPrivateKey, setEscrowPrivateKey] = useState('');
-  const [isFetching, setIsFetching] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [fetchedDetails, setFetchedDetails] = useState<EscrowPreview | null>(null);
   const [newMerchantName, setNewMerchantName] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newDemoBalance, setNewDemoBalance] = useState('');
+  const [createdMerchant, setCreatedMerchant] = useState<{
+    merchant_name: string;
+    username: string;
+    password: string;
+    virtual_account_no: string;
+    escrow_ifsc: string;
+  } | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [editingDemoId, setEditingDemoId] = useState<string | null>(null);
   const [demoDraft, setDemoDraft] = useState('');
@@ -98,8 +117,10 @@ export function MerchantsListPanel() {
         throw new Error(usersData.message ?? 'Failed to load merchants');
       }
 
+      const list = Array.isArray(usersData) ? usersData : [];
+
       setMerchants(
-        (usersData as ManagedMerchant[]).map((merchant) => ({
+        list.map((merchant) => ({
           ...merchant,
           balance_mode: merchant.balance_mode ?? 'demo',
         })),
@@ -128,10 +149,24 @@ export function MerchantsListPanel() {
   }, [loadData]);
 
   useEffect(() => {
-    if (!isLoading) {
-      setOnboardingOpen(merchants.length === 0);
+    const name = newMerchantName.trim();
+    if (!onboardingOpen) {
+      return;
     }
-  }, [isLoading, merchants.length]);
+
+    if (name.length < 2) {
+      setNewUsername('');
+      setNewPassword('');
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setNewUsername(generateUsernameFromName(name));
+      setNewPassword(generatePassword());
+    }, 400);
+
+    return () => window.clearTimeout(timer);
+  }, [newMerchantName, onboardingOpen]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -291,38 +326,6 @@ export function MerchantsListPanel() {
     }
   }
 
-  async function handleFetchDetails() {
-    setIsFetching(true);
-
-    try {
-      const response = await fetch('/api/users/fetch-escrow-details', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          escrow_api_key: escrowApiKey.trim(),
-          escrow_private_key: escrowPrivateKey.trim(),
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message ?? 'Failed to fetch EscrowStack details');
-      }
-
-      setFetchedDetails(data);
-      setNewDemoBalance(String(data.real_balance ?? 0));
-      toast.success('EscrowStack details loaded');
-    } catch (fetchError) {
-      toast.error(
-        fetchError instanceof Error
-          ? fetchError.message
-          : 'Failed to fetch details',
-      );
-    } finally {
-      setIsFetching(false);
-    }
-  }
-
   async function handleCreateMerchant(event: FormEvent) {
     event.preventDefault();
     setIsCreating(true);
@@ -332,12 +335,9 @@ export function MerchantsListPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          escrow_api_key: escrowApiKey.trim(),
-          escrow_private_key: escrowPrivateKey.trim(),
           merchant_name: newMerchantName.trim(),
           username: newUsername.trim(),
           password: newPassword.trim(),
-          demo_balance: Number(newDemoBalance),
         }),
       });
       const data = await response.json();
@@ -346,14 +346,26 @@ export function MerchantsListPanel() {
         throw new Error(data.message ?? 'Failed to create merchant');
       }
 
-      toast.success(`Merchant "${newMerchantName}" created`);
-      setEscrowApiKey('');
-      setEscrowPrivateKey('');
-      setFetchedDetails(null);
+      const va =
+        (data.merchant?.virtual_account_no as string | undefined) ?? '';
+      const ifsc =
+        (data.merchant?.escrow_ifsc as string | undefined) ?? 'HDFC0000060';
+
+      setCreatedMerchant({
+        merchant_name: newMerchantName.trim(),
+        username: newUsername.trim(),
+        password: newPassword.trim(),
+        virtual_account_no: va,
+        escrow_ifsc: ifsc,
+      });
+      toast.success(
+        va
+          ? `Merchant created. VA ${va}`
+          : `Merchant "${newMerchantName}" created`,
+      );
       setNewMerchantName('');
       setNewUsername('');
       setNewPassword('');
-      setNewDemoBalance('');
       setOnboardingOpen(false);
       await loadData();
     } catch (createError) {
@@ -367,16 +379,56 @@ export function MerchantsListPanel() {
     }
   }
 
+  function resetOnboardingForm() {
+    setNewMerchantName('');
+    setNewUsername('');
+    setNewPassword('');
+  }
+
+  function generateCredentialsFromName(name: string) {
+    const trimmed = name.trim();
+    if (trimmed.length < 2) {
+      setNewUsername('');
+      setNewPassword('');
+      return;
+    }
+
+    setNewUsername(generateUsernameFromName(trimmed));
+    setNewPassword(generatePassword());
+  }
+
+  function toggleOnboarding() {
+    setOnboardingOpen((open) => {
+      if (open) {
+        resetOnboardingForm();
+        return false;
+      }
+
+      resetOnboardingForm();
+      setCreatedMerchant(null);
+      return true;
+    });
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Merchants"
         description="Open a merchant to approve transfers and manage balances."
         action={
-          <Button variant="outline" size="sm" onClick={() => void loadData()}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh list
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              onClick={toggleOnboarding}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              {onboardingOpen ? 'Close' : 'Add merchant'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void loadData()}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Refresh list
+            </Button>
+          </div>
         }
       />
 
@@ -433,131 +485,143 @@ export function MerchantsListPanel() {
         </GlassCard>
       </div>
 
-      <GlassCard className="overflow-hidden border-dashed border-slate-300/80">
-        <GlassCardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 border-b border-white/50 px-5 py-4">
-          <div>
-            <GlassCardTitle className="text-sm font-medium">Onboard merchant</GlassCardTitle>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              EscrowStack keys are encrypted at rest and never shown again.
+      {onboardingOpen ? (
+        <GlassCard className="overflow-hidden border-dashed border-slate-300/80">
+          <GlassCardHeader className="space-y-1 px-5 py-4">
+            <GlassCardTitle className="text-sm font-medium">
+              Onboard merchant
+            </GlassCardTitle>
+            <p className="text-xs text-muted-foreground">
+              Enter the merchant name. We generate a portal username from that
+              name and a random password. Virtual account and IFSC are assigned
+              after create.
             </p>
-          </div>
-          <Button
-            variant={onboardingOpen ? 'secondary' : 'outline'}
-            size="sm"
-            onClick={() => setOnboardingOpen((open) => !open)}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            {onboardingOpen ? 'Hide form' : 'Add merchant'}
-          </Button>
-        </GlassCardHeader>
-        {onboardingOpen ? (
+          </GlassCardHeader>
           <GlassCardContent className="space-y-4 border-t border-white/50 pt-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2 md:col-span-2">
-                <Label>EscrowStack API key</Label>
-                <textarea
-                  rows={2}
-                  value={escrowApiKey}
-                  onChange={(e) => {
-                    setEscrowApiKey(e.target.value);
-                    setFetchedDetails(null);
-                  }}
-                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="JWT apikey"
+            <form
+              autoComplete="off"
+              onSubmit={(e) => void handleCreateMerchant(e)}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <Label htmlFor="onboard-merchant-name">Merchant name</Label>
+                <Input
+                  id="onboard-merchant-name"
+                  name="merchant_name"
+                  required
+                  minLength={2}
+                  autoComplete="off"
+                  placeholder="e.g. Rootpay"
+                  value={newMerchantName}
+                  onChange={(e) => setNewMerchantName(e.target.value)}
                 />
               </div>
-              <div className="space-y-2 md:col-span-2">
-                <Label>Private key</Label>
-                <textarea
-                  rows={4}
-                  value={escrowPrivateKey}
-                  onChange={(e) => {
-                    setEscrowPrivateKey(e.target.value);
-                    setFetchedDetails(null);
-                  }}
-                  className="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs"
-                  placeholder="-----BEGIN PRIVATE KEY-----"
-                />
-              </div>
+              {newUsername && newPassword ? (
+                <div className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Username
+                    </p>
+                    <p className="font-mono text-sm font-semibold break-all">
+                      {newUsername}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Password
+                    </p>
+                    <p className="font-mono text-sm font-semibold break-all">
+                      {newPassword}
+                    </p>
+                  </div>
+                  <div className="md:col-span-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => generateCredentialsFromName(newMerchantName)}
+                    >
+                      Generate again
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Username and password appear here after you enter the merchant
+                  name.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Virtual account is auto-assigned (CHAK69 + 6 digits). IFSC
+                HDFC0000060.
+              </p>
+              <Button
+                type="submit"
+                disabled={isCreating || !newUsername || !newPassword}
+              >
+                {isCreating ? 'Creating…' : 'Create merchant'}
+              </Button>
+            </form>
+          </GlassCardContent>
+        </GlassCard>
+      ) : null}
+
+      {createdMerchant ? (
+        <GlassCard className="overflow-hidden border-emerald-200/80 bg-emerald-50/40">
+          <GlassCardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 px-5 py-4">
+            <div>
+              <GlassCardTitle className="text-sm font-medium">
+                {createdMerchant.merchant_name} created
+              </GlassCardTitle>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Copy these now. Username and password are not shown again
+                here after you dismiss this.
+              </p>
             </div>
             <Button
-              type="button"
-              variant="secondary"
-              disabled={isFetching || !escrowApiKey.trim() || !escrowPrivateKey.trim()}
-              onClick={() => void handleFetchDetails()}
+              variant="outline"
+              size="sm"
+              onClick={() => setCreatedMerchant(null)}
             >
-              {isFetching ? 'Fetching…' : 'Fetch EscrowStack details'}
+              Dismiss
             </Button>
-
-            {fetchedDetails ? (
-              <form onSubmit={(e) => void handleCreateMerchant(e)} className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
-                <div className="grid gap-3 text-sm sm:grid-cols-3">
-                  <div>
-                    <p className="text-muted-foreground">Real balance</p>
-                    <p className="font-semibold tabular-nums">
-                      {formatCurrency(fetchedDetails.real_balance)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Virtual account</p>
-                    <p className="font-mono text-xs">
-                      {fetchedDetails.virtual_account_no ?? '—'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">IFSC</p>
-                    <p className="font-mono text-xs">
-                      {fetchedDetails.escrow_ifsc ?? '—'}
-                    </p>
-                  </div>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>Merchant name</Label>
-                    <Input
-                      required
-                      value={newMerchantName}
-                      onChange={(e) => setNewMerchantName(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Demo balance</Label>
-                    <Input
-                      required
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={newDemoBalance}
-                      onChange={(e) => setNewDemoBalance(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Portal username</Label>
-                    <Input
-                      required
-                      minLength={3}
-                      value={newUsername}
-                      onChange={(e) => setNewUsername(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Portal password</Label>
-                    <Input
-                      required
-                      minLength={6}
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <Button type="submit" disabled={isCreating}>
-                  {isCreating ? 'Creating…' : 'Create merchant'}
-                </Button>
-              </form>
-            ) : null}
+          </GlassCardHeader>
+          <GlassCardContent className="grid gap-4 border-t border-white/50 pt-6 sm:grid-cols-2">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Username
+              </p>
+              <p className="mt-1 font-mono text-sm font-semibold break-all">
+                {createdMerchant.username}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Password
+              </p>
+              <p className="mt-1 font-mono text-sm font-semibold break-all">
+                {createdMerchant.password}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Virtual account
+              </p>
+              <p className="mt-1 font-mono text-sm font-semibold break-all">
+                {createdMerchant.virtual_account_no || 'Assigned on create'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                IFSC
+              </p>
+              <p className="mt-1 font-mono text-sm font-semibold break-all">
+                {createdMerchant.escrow_ifsc}
+              </p>
+            </div>
           </GlassCardContent>
-        ) : null}
-      </GlassCard>
+        </GlassCard>
+      ) : null}
 
       <GlassCard className="overflow-hidden">
         <GlassCardHeader className="flex flex-col gap-4 border-b border-white/50 bg-white/30 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -671,6 +735,9 @@ export function MerchantsListPanel() {
                               </div>
                               <p className="text-xs text-muted-foreground">
                                 {merchant.username}
+                                {merchant.virtual_account_no
+                                  ? ` · ${merchant.virtual_account_no}`
+                                  : ''}
                               </p>
                             </div>
                           </div>

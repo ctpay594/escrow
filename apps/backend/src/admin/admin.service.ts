@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -12,11 +11,9 @@ import type { AdminAuthResponse, AdminJwtPayload } from './admin.types';
 import type { AdminLoginDto } from './dto/admin-login.dto';
 import type {
   CreateManagedUserDto,
-  FetchEscrowDetailsDto,
   ResetManagedPasswordDto,
   UpdateManagedUsernameDto,
 } from './dto/managed-user.dto';
-import type { EscrowMerchantPreview } from './admin.types';
 
 @Injectable()
 export class AdminAuthService {
@@ -77,47 +74,27 @@ export class AdminUsersService {
     return this.merchantsService.findAllForAdmin();
   }
 
-  async fetchEscrowDetails(
-    dto: FetchEscrowDetailsDto,
-  ): Promise<EscrowMerchantPreview> {
-    this.validatePrivateKeyFormat(dto.escrow_private_key);
-
-    const snapshot = await this.fetchEscrowSnapshot(dto.escrow_api_key);
-
-    return {
-      virtual_account_no: snapshot.virtualAccountNo,
-      escrow_ifsc: snapshot.escrowIfsc,
-      real_balance: snapshot.availableBalance,
-    };
-  }
-
   async createUser(dto: CreateManagedUserDto) {
-    this.validatePrivateKeyFormat(dto.escrow_private_key);
-
     const user = await this.usersService.create(dto.username, dto.password);
 
     try {
-      const snapshot = await this.fetchEscrowSnapshot(dto.escrow_api_key);
-      const demoBalance = dto.demo_balance ?? snapshot.availableBalance;
-
-      const apiKeyLabel = this.escrowStackService.decodeMerchantNameFromApiKey(
-        dto.escrow_api_key,
-      );
+      const virtualAccountNo =
+        await this.merchantsService.allocateVirtualAccount();
+      const escrowIfsc = this.merchantsService.getSharedIfsc();
+      const demoBalance = dto.demo_balance ?? 0;
 
       const merchant = await this.merchantsService.create({
         userId: user.id,
         merchantName: dto.merchant_name,
-        apiKey: dto.escrow_api_key,
-        privateKey: dto.escrow_private_key,
-        userRef:
-          snapshot.userRef ??
-          (dto.username.length >= 5 ? dto.username : apiKeyLabel) ??
-          dto.username,
-        virtualAccountNo: snapshot.virtualAccountNo ?? undefined,
-        escrowIfsc: snapshot.escrowIfsc ?? undefined,
-        realBalance: snapshot.availableBalance,
+        userRef: dto.username.length >= 5 ? dto.username : dto.merchant_name,
+        virtualAccountNo,
+        escrowIfsc,
+        realBalance: 0,
         demoBalance,
-        escrowAccountDetails: snapshot.escrowAccountDetails,
+        escrowAccountDetails: {
+          assigned_virtual_account: virtualAccountNo,
+          shared_ifsc: escrowIfsc,
+        },
       });
 
       return {
@@ -126,66 +103,11 @@ export class AdminUsersService {
           username: user.username,
         },
         merchant,
-        message: 'Merchant onboarded and synced from EscrowStack',
+        message: `Merchant onboarded. Virtual account ${virtualAccountNo}`,
       };
     } catch (error) {
       await this.usersService.delete(user.id);
       throw error;
-    }
-  }
-
-  private async fetchEscrowSnapshot(apiKey: string) {
-    // Balance is required (new PT path). Load-account is optional — not in
-    // the Chakatalwar passthrough collection; VA/IFSC may be filled later.
-    const balanceResult =
-      await this.escrowStackService.fetchTransactionBalance(apiKey);
-
-    let accountDetails: Awaited<
-      ReturnType<EscrowStackService['fetchLoadAccountDetails']>
-    > = { raw: {} };
-
-    try {
-      accountDetails =
-        await this.escrowStackService.fetchLoadAccountDetails(apiKey);
-    } catch {
-      // Endpoint may 404 on passthrough accounts — continue with balance only.
-    }
-
-    const apiKeyLabel =
-      this.escrowStackService.decodeMerchantNameFromApiKey(apiKey);
-
-    const merchantName =
-      accountDetails.merchantName ?? apiKeyLabel ?? 'Escrow Merchant';
-
-    return {
-      merchantName,
-      userRef: accountDetails.userRef ?? null,
-      // PT balance response includes account_no — use it when load-account is missing
-      virtualAccountNo:
-        accountDetails.virtualAccountNo ?? balanceResult.accountNo ?? null,
-      escrowIfsc: accountDetails.escrowIfsc ?? null,
-      availableBalance: balanceResult.balance,
-      apiKeyLabel,
-      loadInstructions: accountDetails.loadInstructions ?? null,
-      escrowAccountDetails: {
-        balance: balanceResult.raw,
-        account: accountDetails.raw,
-        customer_id: balanceResult.customerId ?? null,
-        account_no: balanceResult.accountNo ?? null,
-      },
-    };
-  }
-
-  private validatePrivateKeyFormat(privateKey: string) {
-    const normalized = privateKey.trim();
-
-    if (
-      !normalized.includes('BEGIN PRIVATE KEY') &&
-      !normalized.includes('BEGIN RSA PRIVATE KEY')
-    ) {
-      throw new BadRequestException(
-        'Private key must be a valid PEM format (BEGIN PRIVATE KEY)',
-      );
     }
   }
 

@@ -1,5 +1,6 @@
 export interface TransferItem {
   id: string;
+  kind?: 'payout' | 'deposit';
   batch_id: string | null;
   payout_ref: string;
   amount: number;
@@ -12,6 +13,19 @@ export interface TransferItem {
   status: string;
   utr: string | null;
   bank_ref: string | null;
+  created_at: string;
+  remitter_name?: string | null;
+  remitter_account?: string | null;
+  virtual_account?: string | null;
+}
+
+export interface DepositItem {
+  id: string;
+  amount: number;
+  utr: string | null;
+  virtual_account: string;
+  remitter_name: string | null;
+  remitter_account: string | null;
   created_at: string;
 }
 

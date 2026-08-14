@@ -5,6 +5,7 @@ import type {
   EscrowBalanceResult,
   PayoutItem,
   PayoutStatusEntry,
+  PayoutStatusQuery,
   PayoutStatusResult,
   PayoutSubmitResult,
 } from './escrowstack.types';
@@ -16,7 +17,7 @@ export class EscrowStackService {
   private readonly payoutUrl: string;
 
   constructor(private readonly configService: ConfigService) {
-    // Live Chakatalwar passthrough (05 collection): cashdfcpt + /v1/pt/hdfc/*
+    // Live collection: cashdfcpt + /v1/pt/hdfc/*
     this.baseUrl = this.configService
       .get<string>('ESCROWSTACK_BASE_URL', 'https://cashdfcpt.escrowstack.io')
       .replace(/\/$/, '');
@@ -41,12 +42,13 @@ export class EscrowStackService {
       'account_no',
       'AC_NO',
     ]);
-    const customerId = this.pickString(response, [
-      'data.customer_id',
-      'data.customerId',
-      'customer_id',
-      'customerId',
-    ]);
+    const customerId =
+      this.pickString(response, [
+        'data.customer_id',
+        'data.customerId',
+        'customer_id',
+        'customerId',
+      ]) ?? this.pickNumericString(response, ['data.customer_id']);
 
     this.logger.log(
       `Account balance fetched: ${balance}` +
@@ -69,7 +71,7 @@ export class EscrowStackService {
   ): Promise<PayoutSubmitResult> {
     const timestamp = getIndianPayoutTimestamp();
     const unsignedPayload = {
-      payouts,
+      payouts: payouts.map((payout) => this.toLivePayoutItem(payout)),
       timestamp,
     };
 
@@ -106,12 +108,21 @@ export class EscrowStackService {
       unknown
     >;
 
-    if (!response.ok) {
-      this.logger.error('EscrowStack payout failed', data);
-      throw new BadGatewayException(
+    if (!response.ok || this.isJsonErrorStatus(data)) {
+      const message =
         this.extractErrorMessage(data) ??
-          `EscrowStack payout failed (${response.status})`,
-      );
+        `EscrowStack payout failed (${response.status})`;
+      this.logger.error(`EscrowStack payout failed: ${message}`);
+      throw new BadGatewayException(message);
+    }
+
+    const code = typeof data.code === 'string' ? data.code.trim() : '';
+
+    if (code && code !== 'EL_PS') {
+      const message =
+        this.extractErrorMessage(data) ?? `EscrowStack payout rejected (${code})`;
+      this.logger.error(message);
+      throw new BadGatewayException(message);
     }
 
     return { raw: data };
@@ -119,22 +130,69 @@ export class EscrowStackService {
 
   async getPayoutStatus(
     apiKey: string,
-    payoutRefs: string[],
+    queries: PayoutStatusQuery[],
   ): Promise<PayoutStatusResult> {
-    const uniqueRefs = [...new Set(payoutRefs.filter(Boolean))];
+    const seen = new Set<string>();
+    const unique = queries.filter((query) => {
+      const payoutRef = query.payoutRef?.trim();
 
-    if (uniqueRefs.length === 0) {
+      if (!payoutRef) {
+        return false;
+      }
+
+      const key = `${payoutRef}|${query.txnDate}|${query.mode}`;
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
+
+    if (unique.length === 0) {
       return { entries: [], raw: {} };
     }
 
-    const response = await this.post(apiKey, '/v1/escrow/get_payout_status', {
-      payout_ref_arr: uniqueRefs,
-    });
+    const entries: PayoutStatusEntry[] = [];
+    const rawByRef: Record<string, unknown> = {};
 
-    return {
-      entries: this.parsePayoutStatusEntries(response, uniqueRefs),
-      raw: response,
-    };
+    for (const query of unique) {
+      try {
+        const response = await this.post(
+          apiKey,
+          '/v1/pt/hdfc/get_payout_status',
+          {
+            payout_ref: query.payoutRef,
+            txn_date: query.txnDate,
+            mode: query.mode,
+          },
+        );
+        rawByRef[query.payoutRef] = response;
+        const parsed = this.parsePayoutStatusEntries(response, [
+          query.payoutRef,
+        ]);
+
+        if (parsed[0]) {
+          this.logger.log(
+            `get_payout_status ${query.payoutRef} date=${query.txnDate} mode=${query.mode} txn=${parsed[0].status} utr=${parsed[0].utr ?? '-'}`,
+          );
+          this.upsertStatusEntry(entries, parsed[0]);
+        } else {
+          this.logger.warn(
+            `Unrecognized get_payout_status shape for ${query.payoutRef} date=${query.txnDate}: ${JSON.stringify(response).slice(0, 400)}`,
+          );
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Status lookup failed';
+        this.logger.warn(
+          `get_payout_status failed for ${query.payoutRef}: ${message}`,
+        );
+      }
+    }
+
+    return { entries, raw: rawByRef };
   }
 
   decodeMerchantNameFromApiKey(apiKey: string): string | null {
@@ -178,12 +236,12 @@ export class EscrowStackService {
       unknown
     >;
 
-    if (!response.ok) {
-      this.logger.error(`EscrowStack ${path} failed`, data);
-      throw new BadGatewayException(
+    if (!response.ok || this.isJsonErrorStatus(data)) {
+      const message =
         this.extractErrorMessage(data) ??
-          `EscrowStack request failed (${response.status})`,
-      );
+        `EscrowStack request failed (${response.status})`;
+      this.logger.error(`EscrowStack ${path} failed: ${message}`);
+      throw new BadGatewayException(message);
     }
 
     return data;
@@ -194,6 +252,7 @@ export class EscrowStackService {
       this.readPath(response, 'data.balance'),
       this.readPath(response, 'data.avaliable_balance'),
       this.readPath(response, 'data.available_balance'),
+      this.readPath(response, 'data.clear_balance'),
       this.readPath(response, 'data.account_balance'),
       this.readPath(response, 'data.amount'),
       this.readPath(response, 'balance'),
@@ -273,9 +332,11 @@ export class EscrowStackService {
 
     for (const item of items) {
       const payoutRef = this.pickString(item, [
+        'PAYMENTREFNO',
         'payout_ref',
         'payoutRef',
         'ref',
+        'REFERENCE_NO',
       ]);
 
       if (!payoutRef) {
@@ -283,15 +344,22 @@ export class EscrowStackService {
       }
 
       const status =
-        this.pickString(item, ['status', 'payout_status', 'state', 'code']) ??
-        'unknown';
-      const utr = this.pickString(item, ['utr', 'UTR']);
+        this.pickString(item, [
+          'TXN_STATUS',
+          'OD_STATUS',
+          'status',
+          'payout_status',
+          'state',
+          'code',
+        ]) ?? 'unknown';
+      const utr = this.pickString(item, ['UTR_NO', 'utr', 'UTR']);
       const bankRef = this.pickString(item, [
+        'TXN_REFERENCE_NO',
+        'REFERENCE_NO',
+        'BATCHREFNO',
         'bankref',
         'bank_ref',
         'bankRef',
-        'crn',
-        'CRN',
       ]);
 
       byRef.set(payoutRef, {
@@ -304,7 +372,20 @@ export class EscrowStackService {
     }
 
     return requestedRefs
-      .map((ref) => byRef.get(ref))
+      .map((ref) => {
+        const exact = byRef.get(ref);
+
+        if (exact) {
+          return exact;
+        }
+
+        if (byRef.size === 1) {
+          const only = [...byRef.values()][0];
+          return { ...only, payout_ref: ref };
+        }
+
+        return undefined;
+      })
       .filter((entry): entry is PayoutStatusEntry => !!entry);
   }
 
@@ -312,6 +393,8 @@ export class EscrowStackService {
     response: Record<string, unknown>,
   ): Record<string, unknown>[] {
     const candidates: unknown[] = [
+      this.readPath(response, 'data.ALL_RECORDS'),
+      this.readPath(response, 'data.all_records'),
       response.data,
       response.payouts,
       response.payout_status,
@@ -331,6 +414,8 @@ export class EscrowStackService {
         const nested = candidate as Record<string, unknown>;
 
         for (const key of [
+          'ALL_RECORDS',
+          'all_records',
           'payouts',
           'payout_status',
           'results',
@@ -348,9 +433,11 @@ export class EscrowStackService {
         }
 
         if (
+          'PAYMENTREFNO' in nested ||
           'payout_ref' in nested ||
           'payoutRef' in nested ||
-          'status' in nested
+          'TXN_STATUS' in nested ||
+          'OD_STATUS' in nested
         ) {
           return [nested];
         }
@@ -358,6 +445,94 @@ export class EscrowStackService {
     }
 
     return [];
+  }
+
+  private pickNumericString(
+    source: Record<string, unknown>,
+    paths: string[],
+  ): string | undefined {
+    for (const path of paths) {
+      const value = this.readPath(source, path);
+
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return String(value);
+      }
+    }
+
+    return undefined;
+  }
+
+  private isJsonErrorStatus(response: Record<string, unknown>): boolean {
+    return typeof response.status === 'number' && response.status >= 400;
+  }
+
+  private toLivePayoutItem(payout: PayoutItem): Record<string, unknown> {
+    const beneficiary =
+      payout.payout_mode === 'UPI'
+        ? {
+            account_name: payout.beneficiary.account_name,
+            vpa: payout.beneficiary.vpa ?? '',
+          }
+        : {
+            account_name: payout.beneficiary.account_name,
+            account_no: payout.beneficiary.account_no ?? '',
+            ifsc: payout.beneficiary.ifsc ?? '',
+          };
+
+    return {
+      payout_ref: payout.payout_ref,
+      amount: payout.amount,
+      payout_mode: payout.payout_mode,
+      transaction_note: payout.transaction_note?.trim() || 'payout',
+      payee: {
+        user_ref: payout.payee.user_ref,
+        user_name: payout.payee.user_name ?? '',
+      },
+      beneficiary,
+    };
+  }
+
+  private upsertStatusEntry(
+    entries: PayoutStatusEntry[],
+    incoming: PayoutStatusEntry,
+  ): void {
+    const existingIndex = entries.findIndex(
+      (entry) => entry.payout_ref === incoming.payout_ref,
+    );
+
+    if (existingIndex < 0) {
+      entries.push(incoming);
+      return;
+    }
+
+    const existing = entries[existingIndex];
+    const incomingRank = this.statusFinality(incoming.status);
+    const existingRank = this.statusFinality(existing.status);
+
+    if (
+      incomingRank > existingRank ||
+      (incomingRank === existingRank && incoming.utr && !existing.utr)
+    ) {
+      entries[existingIndex] = incoming;
+    }
+  }
+
+  private statusFinality(status: string): number {
+    const normalized = status.trim().toLowerCase();
+
+    if (
+      normalized === 'completed' ||
+      normalized === 'processed' ||
+      normalized === 'success' ||
+      normalized === 'txsett' ||
+      normalized.includes('fail') ||
+      normalized.includes('reject') ||
+      normalized.includes('return')
+    ) {
+      return 2;
+    }
+
+    return 1;
   }
 
   private readPath(source: Record<string, unknown>, path: string): unknown {

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
@@ -69,7 +69,6 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
   const [merchant, setMerchant] = useState<ManagedMerchant | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUpdatingMode, setIsUpdatingMode] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -151,48 +150,6 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
     await confirmAction();
     setConfirmAction(null);
     setConfirmOptions(null);
-  }
-
-  async function refreshRealBalance() {
-    if (!merchant) return;
-
-    setIsRefreshing(true);
-
-    try {
-      const response = await fetch(`/api/users/${merchant.id}/refresh-balance`, {
-        method: 'POST',
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message ?? 'Failed to refresh balance');
-      }
-
-      const nextRealBalance = Number(data.real_balance);
-
-      setMerchant((current) =>
-        current
-          ? {
-              ...current,
-              real_balance: nextRealBalance,
-              available_balance:
-                current.balance_mode === 'real'
-                  ? Math.max(nextRealBalance - current.pending_balance, 0)
-                  : current.available_balance,
-            }
-          : current,
-      );
-
-      toast.success(`Bank balance: ${formatCurrency(nextRealBalance)}`);
-    } catch (refreshError) {
-      toast.error(
-        refreshError instanceof Error
-          ? refreshError.message
-          : 'Failed to refresh balance',
-      );
-    } finally {
-      setIsRefreshing(false);
-    }
   }
 
   async function changeBalanceMode(balanceMode: BalanceMode) {
@@ -477,7 +434,7 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className={cn(glassInset(), 'px-4 py-3')}>
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Real (bank)
+                Real (collected)
               </p>
               <div className="mt-1 flex items-center gap-2">
                 <p
@@ -489,17 +446,6 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
                 >
                   {formatCurrency(merchant.real_balance)}
                 </p>
-                <button
-                  type="button"
-                  disabled={isRefreshing}
-                  aria-label="Refresh bank balance"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                  onClick={() => void refreshRealBalance()}
-                >
-                  <RefreshCw
-                    className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
-                  />
-                </button>
               </div>
               {merchant.pending_balance > 0 ? (
                 <p className="mt-1 text-xs text-muted-foreground">
@@ -508,7 +454,11 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
                     {formatCurrency(merchant.pending_balance)}
                   </span>
                 </p>
-              ) : null}
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  From VA deposit callbacks
+                </p>
+              )}
             </div>
 
             <div className={cn(glassInset(), 'px-4 py-3')}>

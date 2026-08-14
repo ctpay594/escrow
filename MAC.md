@@ -96,13 +96,11 @@ Never commit `apps/backend/.env`.
 
 You do **not** install Postgres locally. The Mac talks to the same **Supabase** project.
 
-In **Supabase → SQL Editor**, run migrations **in order** if any are not applied yet:
+In **Supabase → SQL Editor**, run the single file:
 
-`001` → `002` → `003` → `004` → `005` → `006` → `007` → `008` → `009` → `010` → `011` → `012` → `013` → `014` → `015` → `016`
+`apps/backend/supabase/migrations/001_schema.sql`
 
-Files: `apps/backend/supabase/migrations/`
-
-**016** drops per-merchant encrypted API/private key columns. Platform keys live in `.env` only.
+Safe to re-run. Adds missing columns (`balance_mode`, `real_balance`, etc.) and drops leftover encrypted key columns. Does not delete existing merchants.
 
 If you already have an admin row, skip this. Otherwise:
 
@@ -146,8 +144,7 @@ Log into admin with the `admins` table username/password. Onboard a merchant wit
 | `pnpm: command not found` | `brew install pnpm` and reopen Terminal |
 | Backend crash on missing env | `.env` missing or empty keys — copy from Windows |
 | `GET /health` fails | Wrong `SUPABASE_*` keys |
-| Admin list error | Run migrations through **016** |
-| Create merchant fails on encrypted columns | Run **016** |
+| Admin / create merchant schema error | Re-run `001_schema.sql` in Supabase SQL Editor |
 | Port already in use | Quit old Node: `lsof -i :3000` then `kill <PID>` |
 | Frontends cannot reach API | Backend not running, or `CORS_ORIGIN` missing `3001`/`3002` |
 

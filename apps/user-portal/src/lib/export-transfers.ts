@@ -40,7 +40,8 @@ export function exportTransfersCsv(
 ) {
   const headers = [
     'Date',
-    'Beneficiary',
+    'Type',
+    'Party',
     'Payment Ref',
     'UTR',
     'Mode',
@@ -60,6 +61,7 @@ export function exportTransfersCsv(
   const rows = transfers.map((t) =>
     [
       csvCell(formatDate(t.created_at)),
+      csvCell(t.kind === 'deposit' ? 'Deposit' : 'Payout'),
       csvCell(t.beneficiary_account_name),
       excelTextCell(t.payout_ref),
       excelTextCell(transferUtr(t) ?? ''),

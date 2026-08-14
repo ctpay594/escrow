@@ -48,6 +48,17 @@ export class AdminAuthController {
   }
 }
 
+@Controller('admin/bank')
+@UseGuards(AdminJwtAuthGuard)
+export class AdminBankController {
+  constructor(private readonly adminUsersService: AdminUsersService) {}
+
+  @Get('balance')
+  getCompanyBankBalance() {
+    return this.adminUsersService.fetchCompanyBankBalance();
+  }
+}
+
 @Controller('admin/users')
 @UseGuards(AdminJwtAuthGuard)
 export class AdminUsersController {
@@ -106,6 +117,11 @@ export class AdminUsersController {
   @Post(':id/refresh-balance')
   refreshRealBalance(@Param('id') id: string) {
     return this.adminUsersService.refreshRealBalance(id);
+  }
+
+  @Get(':id/deposits')
+  listDeposits(@Param('id') id: string) {
+    return this.adminUsersService.listDeposits(id);
   }
 
   @Delete(':id')

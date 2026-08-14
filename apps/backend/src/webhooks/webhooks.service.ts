@@ -6,6 +6,7 @@ import {
 import { MerchantsService } from '../merchants';
 import { SupabaseService } from '../supabase';
 import { TransfersService } from '../transfers';
+import { parseCollectAlerts } from './collect-alerts';
 
 export interface WebhookRequestMeta {
   remoteIp: string | null;
@@ -37,7 +38,7 @@ export class WebhooksService {
 
     const savedId = await this.saveCallback(body, meta.remoteIp);
 
-    this.applyInBackground(body).catch((error: unknown) => {
+    this.applyInBackground(body, savedId).catch((error: unknown) => {
       const message =
         error instanceof Error ? error.message : 'Callback apply failed';
       this.logger.warn(message);
@@ -48,6 +49,10 @@ export class WebhooksService {
       message: 'Callback saved. Check Supabase table: callbacks',
       saved_id: savedId,
     };
+  }
+
+  async replayStoredCollects(): Promise<void> {
+    await this.replayUnprocessedCallbacks(null);
   }
 
   private normalizeBody(payload: unknown): Record<string, unknown> {
@@ -82,23 +87,13 @@ export class WebhooksService {
       .insert({
         from_ip: fromIp,
         body,
+        processed: false,
       })
       .select('id')
       .maybeSingle();
 
     if (error) {
       this.logger.error(`Failed to save callback: ${error.message}`);
-
-      if (
-        error.message.toLowerCase().includes('callbacks') &&
-        (error.message.toLowerCase().includes('does not exist') ||
-          error.message.toLowerCase().includes('could not find'))
-      ) {
-        throw new InternalServerErrorException(
-          'Run migration 014_simple_callbacks.sql in Supabase first',
-        );
-      }
-
       throw new InternalServerErrorException('Failed to save callback');
     }
 
@@ -107,12 +102,105 @@ export class WebhooksService {
 
   private async applyInBackground(
     body: Record<string, unknown>,
+    callbackId: string | null,
   ): Promise<void> {
+    const result = await this.applyBody(body, callbackId);
+
+    if (callbackId) {
+      await this.markCallback(callbackId, result);
+    }
+
+    await this.replayUnprocessedCallbacks(callbackId);
+  }
+
+  private async applyBody(
+    body: Record<string, unknown>,
+    callbackId: string | null,
+  ): Promise<string> {
     if (typeof body.payout_ref === 'string' && body.payout_ref.trim()) {
       await this.transfersService.handleEscrowPayoutWebhook(body);
+      return 'payout_webhook';
+    }
+
+    const alerts = parseCollectAlerts(body);
+
+    if (alerts.length > 0) {
+      const outcomes: string[] = [];
+
+      for (const alert of alerts) {
+        const credited = await this.merchantsService.creditCollectDeposit({
+          virtualAccount: alert.virtualAccount,
+          amount: alert.amount,
+          dedupeKey: alert.dedupeKey,
+          utr: alert.utr,
+          remitterName: alert.remitterName,
+          remitterAccount: alert.remitterAccount,
+          callbackId,
+        });
+
+        outcomes.push(
+          `${alert.virtualAccount}:${credited.outcome}:${alert.amount}`,
+        );
+      }
+
+      return outcomes.join('; ');
+    }
+
+    return 'ignored_not_collect_or_payout';
+  }
+
+  private async markCallback(
+    callbackId: string,
+    processResult: string,
+  ): Promise<void> {
+    const { error } = await this.supabaseService
+      .getAdminClient()
+      .from('callbacks')
+      .update({
+        processed: true,
+        process_result: processResult.slice(0, 500),
+      })
+      .eq('id', callbackId);
+
+    if (error) {
+      this.logger.warn(`Could not mark callback processed: ${error.message}`);
+    }
+  }
+
+  private async replayUnprocessedCallbacks(
+    skipId: string | null,
+  ): Promise<void> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('callbacks')
+      .select('id, body')
+      .eq('processed', false)
+      .order('received_at', { ascending: true })
+      .limit(50);
+
+    if (error || !data) {
       return;
     }
 
-    await this.merchantsService.creditDepositFromWebhook(body);
+    for (const row of data) {
+      const id = row.id as string;
+
+      if (skipId && id === skipId) {
+        continue;
+      }
+
+      const body =
+        row.body && typeof row.body === 'object' && !Array.isArray(row.body)
+          ? (row.body as Record<string, unknown>)
+          : null;
+
+      if (!body) {
+        await this.markCallback(id, 'ignored_invalid_body');
+        continue;
+      }
+
+      const result = await this.applyBody(body, id);
+      await this.markCallback(id, result);
+    }
   }
 }

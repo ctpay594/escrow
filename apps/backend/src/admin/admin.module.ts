@@ -11,6 +11,7 @@ import { UsersModule } from '../users';
 import { AdminJwtAuthGuard } from './admin-jwt-auth.guard';
 import {
   AdminAuthController,
+  AdminBankController,
   AdminTransfersController,
   AdminUsersController,
 } from './admin.controller';
@@ -38,6 +39,7 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
   ],
   controllers: [
     AdminAuthController,
+    AdminBankController,
     AdminUsersController,
     AdminTransfersController,
   ],

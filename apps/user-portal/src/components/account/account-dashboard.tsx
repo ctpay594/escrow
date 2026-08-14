@@ -18,7 +18,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatCurrency } from '@/lib/format';
 import { glassInset } from '@/lib/glass-styles';
-import type { MerchantProfile, SessionUser, TransferItem } from '@/lib/types';
+import type { DepositItem, MerchantProfile, SessionUser, TransferItem } from '@/lib/types';
+import { depositToHistoryRow } from '@/lib/deposit-display';
 import { cn } from '@/lib/utils';
 
 interface AccountDashboardProps {
@@ -59,16 +60,33 @@ export function AccountDashboard({
   const loadTransfers = useCallback(async () => {
     setError(null);
     try {
-      const response = await fetch('/api/transfers');
-      const data = await response.json();
-      if (response.status === 401) {
+      const [transfersResponse, depositsResponse] = await Promise.all([
+        fetch('/api/transfers'),
+        fetch('/api/deposits'),
+      ]);
+      const transfersData = await transfersResponse.json();
+      const depositsData = await depositsResponse.json();
+      if (transfersResponse.status === 401 || depositsResponse.status === 401) {
         window.location.href = '/api/auth/logout?redirect=/login';
         return;
       }
-      if (!response.ok) {
-        throw new Error(data.message ?? 'Failed to load activity');
+      if (!transfersResponse.ok) {
+        throw new Error(transfersData.message ?? 'Failed to load activity');
       }
-      setTransfers(data);
+      const payouts = (Array.isArray(transfersData) ? transfersData : []).map(
+        (row: TransferItem) => ({ ...row, kind: row.kind ?? 'payout' }),
+      );
+      const deposits = (
+        depositsResponse.ok && Array.isArray(depositsData)
+          ? (depositsData as DepositItem[])
+          : []
+      ).map(depositToHistoryRow);
+      setTransfers(
+        [...payouts, ...deposits].sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        ),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load activity');
     } finally {
@@ -128,6 +146,10 @@ export function AccountDashboard({
       .filter((t) => t.status === 'SUCCESS' && isToday(t.created_at))
       .reduce((sum, t) => sum + t.amount, 0);
 
+    const collectedToday = transfers
+      .filter((t) => t.kind === 'deposit' && isToday(t.created_at))
+      .reduce((sum, t) => sum + t.amount, 0);
+
     const awaitingApproval = transfers.filter(
       (t) => t.status === 'PENDING_APPROVAL',
     ).length;
@@ -142,6 +164,7 @@ export function AccountDashboard({
 
     return {
       settledToday,
+      collectedToday,
       awaitingApproval,
       inProgress,
       completedThisWeek,
@@ -236,7 +259,10 @@ export function AccountDashboard({
                 {formatCurrency(snapshot.settledToday)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {snapshot.completedThisWeek} completed this week
+                {snapshot.completedThisWeek} payouts this week
+                {snapshot.collectedToday > 0
+                  ? ` · collected ${formatCurrency(snapshot.collectedToday)} today`
+                  : ''}
               </p>
             </div>
           </div>

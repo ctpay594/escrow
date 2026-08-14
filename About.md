@@ -31,8 +31,8 @@ Merchants use the **user portal** to view balance, load funds, and request payou
 
 **Reference files (repo root):**
 
+- `Live-Credential.postman_collection.json` — live EscrowStack PT APIs (payout, status, balance)
 - `payout.cts.txt` — Node RSA-SHA256 signing + payout flow (IST timestamp)
-- `EStack-ESCROW-HDFC Chakrathalwar.postman_collection (1).json` — full EscrowStack API collection
 - `Readme.md` — quick start and commands
 - `MAC.md` — clone and run on a Mac (after leaving Windows)
 - `DEPLOYMENT.md` — production hosting (Vercel + VPS + DNS + updates)
@@ -166,9 +166,9 @@ When not `active`:
 **Services:** `apps/backend/src/escrowstack/`
 
 - Balance: `POST /v1/pt/hdfc/get_account_balance` (base: `cashdfcpt.escrowstack.io`)
-- Payout: `POST /v1/pt/hdfc/payout`
-- Payout status: `POST /v1/pt/hdfc/get_payout_status` (confirm path vs old `/v1/escrow/get_payout_status`)
-- Signing: RSA-SHA256 on unsigned JSON + `timestamp` (IST), then attach `signature`; header `apikey`
+- Payout: `POST /v1/pt/hdfc/payout` — body `{ payouts, timestamp, signature }`, header `apikey`
+- Payout status: `POST /v1/pt/hdfc/get_payout_status` — body `{ payout_ref, txn_date, mode }`; response `data.ALL_RECORDS[]` (`TXN_STATUS`, `OD_STATUS`, `UTR_NO`, `PAYMENTREFNO`)
+- Signing: RSA-SHA256 on unsigned JSON + IST `timestamp`, then attach `signature`
 
 **Security:**
 
@@ -177,8 +177,10 @@ When not `active`:
 
 **Payout lifecycle (EscrowStack):**
 
-- Submitted → webhook `processed` (`PO_BP_DCP`) or `failed` (`ERR_BP_IPR`)
-- Reconcile job polls status when webhook not yet wired (`transfer-reconcile.service.ts`)
+- Submit → `EL_PS` → our transfer `PROCESSING`
+- Bank poll: `TXN_STATUS=Completed` / `OD_STATUS=TXSETT` → `SUCCESS` + UTR
+- Webhook (if it arrives): `processed` (`PO_BP_DCP`) or `failed` (`ERR_BP_IPR`)
+- After approve we poll for ~4 minutes; leftover `PROCESSING` rows are swept on boot and every 15 minutes; user/admin History also calls reconcile
 
 ---
 

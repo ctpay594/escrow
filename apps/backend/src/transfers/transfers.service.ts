@@ -54,7 +54,7 @@ export class TransfersService {
       throw new NotFoundException('Merchant profile not found');
     }
 
-    if (ledger.demoBalance < input.amount) {
+    if (ledger.spendable < input.amount) {
       throw new BadRequestException('Insufficient available balance');
     }
 
@@ -140,9 +140,9 @@ export class TransfersService {
       throw new NotFoundException('Merchant profile not found');
     }
 
-    if (ledger.demoBalance < totalAmount) {
+    if (ledger.spendable < totalAmount) {
       throw new BadRequestException(
-        `Insufficient balance. Need ${totalAmount}, available ${ledger.demoBalance}`,
+        `Insufficient balance. Need ${totalAmount}, available ${ledger.spendable}`,
       );
     }
 
@@ -311,6 +311,10 @@ export class TransfersService {
     return rows.map((row) => this.toPublicTransfer(row as TransferRecord));
   }
 
+  listDepositsForUser(userId: string) {
+    return this.merchantsService.listDepositsForUser(userId);
+  }
+
   async listTransfersForAdmin(
     status?: TransferStatus,
     userId?: string,
@@ -433,49 +437,45 @@ export class TransfersService {
       };
     }
 
-    const groupedByUser = new Map<string, TransferRecord[]>();
+    const credentials = this.merchantsService.getPlatformCredentials();
+    const statusResult = await this.escrowStackService.getPayoutStatus(
+      credentials.apiKey,
+      transfers.flatMap((transfer) => {
+        const dates = [
+          ...new Set(
+            [
+              this.toIstTxnDate(transfer.updated_at),
+              this.toIstTxnDate(transfer.created_at),
+            ].filter(Boolean),
+          ),
+        ];
 
-    for (const transfer of transfers) {
-      const existing = groupedByUser.get(transfer.user_id) ?? [];
-      existing.push(transfer);
-      groupedByUser.set(transfer.user_id, existing);
-    }
+        return dates.map((txnDate) => ({
+          payoutRef: transfer.payout_ref,
+          txnDate,
+          mode: transfer.payout_mode,
+        }));
+      }),
+    );
+    const statusByRef = new Map(
+      statusResult.entries.map((entry) => [entry.payout_ref, entry]),
+    );
 
     let updated = 0;
     const updatedTransfers: PublicTransfer[] = [];
 
-    for (const [userId, userTransfers] of groupedByUser) {
-      try {
-        const credentials =
-          await this.merchantsService.getDecryptedCredentials(userId);
-        const statusResult = await this.escrowStackService.getPayoutStatus(
-          credentials.apiKey,
-          userTransfers.map((transfer) => transfer.payout_ref),
-        );
-        const statusByRef = new Map(
-          statusResult.entries.map((entry) => [entry.payout_ref, entry]),
-        );
+    for (const transfer of transfers) {
+      const entry = statusByRef.get(transfer.payout_ref);
 
-        for (const transfer of userTransfers) {
-          const entry = statusByRef.get(transfer.payout_ref);
+      if (!entry) {
+        continue;
+      }
 
-          if (!entry) {
-            continue;
-          }
+      const applied = await this.applyPayoutStatusUpdate(transfer, entry);
 
-          const applied = await this.applyPayoutStatusUpdate(transfer, entry);
-
-          if (applied) {
-            updated += 1;
-            updatedTransfers.push(applied);
-          }
-        }
-      } catch (reconcileError) {
-        const message =
-          reconcileError instanceof Error
-            ? reconcileError.message
-            : 'Failed to reconcile merchant transfers';
-        this.logger.warn(`Reconcile skipped for user ${userId}: ${message}`);
+      if (applied) {
+        updated += 1;
+        updatedTransfers.push(applied);
       }
     }
 
@@ -502,7 +502,9 @@ export class TransfersService {
   async handleEscrowPayoutWebhook(
     raw: Record<string, unknown>,
   ): Promise<{ outcome: string }> {
-    const payoutRef = this.pickWebhookString(raw, 'payout_ref');
+    const payoutRef =
+      this.pickWebhookString(raw, 'payout_ref') ??
+      this.pickWebhookString(raw, 'PAYMENTREFNO');
 
     if (!payoutRef) {
       return { outcome: 'ignored_no_payout_ref' };
@@ -523,12 +525,20 @@ export class TransfersService {
     }
 
     const entry = {
-      status: this.pickWebhookString(raw, 'status') ?? '',
+      status:
+        this.pickWebhookString(raw, 'status') ??
+        this.pickWebhookString(raw, 'TXN_STATUS') ??
+        this.pickWebhookString(raw, 'code') ??
+        '',
       utr:
         this.pickWebhookString(raw, 'bankref') ??
+        this.pickWebhookString(raw, 'UTR_NO') ??
         this.pickWebhookString(raw, 'utr') ??
         undefined,
-      bank_ref: this.pickWebhookString(raw, 'bankref') ?? undefined,
+      bank_ref:
+        this.pickWebhookString(raw, 'bankref') ??
+        this.pickWebhookString(raw, 'TXN_REFERENCE_NO') ??
+        undefined,
       raw,
     };
 
@@ -652,28 +662,53 @@ export class TransfersService {
 
     if (
       code === 'po_bp_dcp' ||
+      code === 'txsett' ||
       normalized === 'processed' ||
-      normalized === 'success' ||
       normalized === 'completed' ||
-      normalized === 'complete'
+      normalized === 'complete' ||
+      normalized === 'success' ||
+      normalized === 'txsett' ||
+      normalized === 'settled'
     ) {
       return 'SUCCESS';
     }
 
     if (
       code === 'err_bp_ipr' ||
+      code === 'txrej' ||
+      code === 'txfail' ||
       normalized.includes('fail') ||
       normalized.includes('error') ||
-      normalized.includes('reject')
+      normalized.includes('reject') ||
+      normalized.includes('return') ||
+      normalized.includes('revers')
     ) {
       return 'FAILED';
+    }
+
+    if (
+      code === 'el_ps' ||
+      normalized === 'pending' ||
+      normalized === 'submitted' ||
+      normalized === 'unknown'
+    ) {
+      return 'PROCESSING';
     }
 
     return 'PROCESSING';
   }
 
+  private toIstTxnDate(iso: string): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(iso));
+  }
+
   private pickStatusCode(raw: Record<string, unknown>): string | null {
-    const code = raw.code ?? raw.status_code ?? raw.statusCode;
+    const code = raw.code ?? raw.status_code ?? raw.statusCode ?? raw.OD_STATUS ?? raw.TXN_STATUS;
 
     if (typeof code === 'string') {
       return code.trim().toLowerCase();
@@ -801,10 +836,10 @@ export class TransfersService {
       payout_ref: transfer.payout_ref,
       amount: Number(transfer.amount),
       payout_mode: transfer.payout_mode,
-      transaction_note: transfer.transaction_note ?? undefined,
+      transaction_note: transfer.transaction_note?.trim() || 'payout',
       payee: {
         user_ref: payee.userRef,
-        user_name: payee.userName,
+        user_name: payee.userName ?? '',
       },
       beneficiary,
     };

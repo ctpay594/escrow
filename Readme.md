@@ -166,5 +166,5 @@ Full steps: [`DEPLOYMENT.md`](DEPLOYMENT.md).
 - [`MAC.md`](MAC.md) — Mac install and run  
 - [`About.md`](About.md) — architecture, APIs, money flows  
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Vercel + VPS + DNS  
+- `Live-Credential.postman_collection.json` — live payout / status / balance APIs  
 - `payout.cts.txt` — signing example  
-- EscrowStack Postman collections in the repo root  

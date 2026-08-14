@@ -4,6 +4,7 @@ export const transferStatusVariant: Record<string, BadgeProps['variant']> = {
   PENDING_APPROVAL: 'warning',
   PROCESSING: 'processing',
   SUCCESS: 'success',
+  CREDITED: 'success',
   FAILED: 'destructive',
   REJECTED: 'secondary',
 };
@@ -16,6 +17,8 @@ export function userTransferStatus(status: string): string {
       return 'Processing';
     case 'SUCCESS':
       return 'Completed';
+    case 'CREDITED':
+      return 'Credited';
     case 'FAILED':
       return 'Failed';
     case 'REJECTED':

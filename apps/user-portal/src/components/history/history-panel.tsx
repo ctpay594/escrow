@@ -38,11 +38,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { depositToHistoryRow, isDepositRow } from '@/lib/deposit-display';
 import { exportTransfersCsv, buildTransferReceiptText } from '@/lib/export-transfers';
 import { formatCurrency, formatDate, formatTableDate } from '@/lib/format';
 import { glassInset, glassSurface, glassTableHead, glassTableRow } from '@/lib/glass-styles';
 import { transferUtr } from '@/lib/transfer-display';
-import type { TransferItem } from '@/lib/types';
+import type { DepositItem, TransferItem } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 8;
@@ -97,19 +98,37 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   const loadTransfers = useCallback(async () => {
     setError(null);
     try {
-      const response = await fetch('/api/transfers');
-      const data = await response.json();
+      const [transfersResponse, depositsResponse] = await Promise.all([
+        fetch('/api/transfers'),
+        fetch('/api/deposits'),
+      ]);
+      const transfersData = await transfersResponse.json();
+      const depositsData = await depositsResponse.json();
 
-      if (response.status === 401) {
+      if (transfersResponse.status === 401 || depositsResponse.status === 401) {
         window.location.href = '/api/auth/logout?redirect=/login';
         return;
       }
 
-      if (!response.ok) {
-        throw new Error(data.message ?? 'Failed to load history');
+      if (!transfersResponse.ok) {
+        throw new Error(transfersData.message ?? 'Failed to load history');
       }
 
-      setTransfers(data);
+      const payouts = (Array.isArray(transfersData) ? transfersData : []).map(
+        (row: TransferItem) => ({ ...row, kind: row.kind ?? 'payout' }),
+      );
+      const deposits = (
+        depositsResponse.ok && Array.isArray(depositsData)
+          ? (depositsData as DepositItem[])
+          : []
+      ).map(depositToHistoryRow);
+
+      setTransfers(
+        [...payouts, ...deposits].sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        ),
+      );
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -208,9 +227,18 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
         return false;
       }
 
+      if (statusFilter === 'CREDITED' && !isDepositRow(transfer)) {
+        return false;
+      }
+
+      if (statusFilter === 'SUCCESS' && isDepositRow(transfer)) {
+        return false;
+      }
+
       if (
         statusFilter !== 'all' &&
         statusFilter !== 'processing' &&
+        statusFilter !== 'CREDITED' &&
         transfer.status !== statusFilter
       ) {
         return false;
@@ -224,7 +252,8 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
         transfer.payout_ref.toLowerCase().includes(query) ||
         utr.toLowerCase().includes(query) ||
         (transfer.beneficiary_account_no ?? '').toLowerCase().includes(query) ||
-        (transfer.beneficiary_ifsc ?? '').toLowerCase().includes(query)
+        (transfer.beneficiary_ifsc ?? '').toLowerCase().includes(query) ||
+        (transfer.virtual_account ?? '').toLowerCase().includes(query)
       );
     });
   }, [transfers, search, statusFilter]);
@@ -240,6 +269,10 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   }, [search, statusFilter]);
 
   function downloadReceipt(transfer: TransferItem) {
+    if (isDepositRow(transfer)) {
+      toast.message('Deposits do not have a payout receipt');
+      return;
+    }
     const blob = new Blob([buildTransferReceiptText(transfer)], {
       type: 'text/plain',
     });
@@ -256,7 +289,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
     <div className="space-y-6">
       <PageHeader
         title="History"
-        description="Last 48 hours · tap a row for details"
+        description="Last 48 hours · deposits and transfers"
         action={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -306,7 +339,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
             <div className="relative min-w-0 flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search beneficiary or ref…"
+                placeholder="Search remitter, beneficiary, UTR…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-9"
@@ -322,6 +355,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                   <SelectItem value="all">All statuses</SelectItem>
                   <SelectItem value="processing">Processing</SelectItem>
                   <SelectItem value="PENDING_APPROVAL">Pending approval</SelectItem>
+                  <SelectItem value="CREDITED">Deposits</SelectItem>
                   <SelectItem value="SUCCESS">Completed</SelectItem>
                   <SelectItem value="FAILED">Failed</SelectItem>
                   <SelectItem value="REJECTED">Rejected</SelectItem>
@@ -366,10 +400,10 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
             <div className="p-5">
               <EmptyStateIllustrated
               icon={FileText}
-              title="No transfers found"
+              title="No transactions found"
               description={
                 transfers.length === 0
-                  ? 'Transfers from the last 48 hours will appear here.'
+                  ? 'Deposits and transfers from the last 48 hours will appear here.'
                   : 'Try adjusting your search or filters.'
               }
             />
@@ -390,11 +424,19 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <TransferStatusBadge status={transfer.status} />
-                        <p className="text-lg font-semibold tabular-nums">
+                        <p className={cn(
+                          'text-lg font-semibold tabular-nums',
+                          isDepositRow(transfer) && 'text-emerald-700',
+                        )}>
+                          {isDepositRow(transfer) ? '+' : ''}
                           {formatCurrency(transfer.amount)}
                         </p>
                       </div>
-                      <p className="mt-2 font-medium">{transfer.beneficiary_account_name}</p>
+                      <p className="mt-2 font-medium">
+                        {isDepositRow(transfer)
+                          ? `Deposit · ${transfer.beneficiary_account_name}`
+                          : transfer.beneficiary_account_name}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         {formatDate(transfer.created_at)}
                       </p>
@@ -420,7 +462,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                   <thead className={glassTableHead()}>
                     <tr>
                       <th className="px-5 py-3 text-left">Date</th>
-                      <th className="px-4 py-3 text-left">Beneficiary</th>
+                      <th className="px-4 py-3 text-left">Party</th>
                       <th className="min-w-[11rem] px-4 py-3 text-left">Payment ref</th>
                       <th className="min-w-[9rem] px-4 py-3 text-left">UTR</th>
                       <th className="px-4 py-3 text-right">Amount</th>
@@ -454,7 +496,9 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                         </td>
                         <td className="max-w-[10rem] px-4 py-3">
                           <p className="truncate font-medium">
-                            {transfer.beneficiary_account_name}
+                            {isDepositRow(transfer)
+                              ? `Deposit · ${transfer.beneficiary_account_name}`
+                              : transfer.beneficiary_account_name}
                           </p>
                         </td>
                         <td className="px-4 py-3 align-top font-mono text-xs leading-relaxed">
@@ -473,7 +517,11 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                             {transferUtrLabel(transfer)}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right font-medium tabular-nums">
+                        <td className={cn(
+                          'px-4 py-3 text-right font-medium tabular-nums',
+                          isDepositRow(transfer) && 'text-emerald-700',
+                        )}>
+                          {isDepositRow(transfer) ? '+' : ''}
                           {formatCurrency(transfer.amount)}
                         </td>
                         <td className="px-5 py-3 text-right">
@@ -487,7 +535,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
 
               <div className="flex items-center justify-between border-t border-white/50 px-5 py-4">
                 <p className="text-sm text-muted-foreground">
-                  Last 48 hrs · {filtered.length} transfer{filtered.length === 1 ? '' : 's'}
+                  Last 48 hrs · {filtered.length} transaction{filtered.length === 1 ? '' : 's'}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button

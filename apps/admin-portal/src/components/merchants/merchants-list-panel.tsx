@@ -26,6 +26,7 @@ import { formatCurrency } from '@/lib/format';
 import { glassInset, glassTableHead, glassTableRow } from '@/lib/glass-styles';
 import { updateMerchantBalanceMode } from '@/lib/merchant-balance';
 import { cn } from '@/lib/utils';
+import { UserPortalLiveLink } from '@/components/user-portal-live-link';
 
 interface ManagedMerchant {
   id: string;
@@ -91,7 +92,9 @@ export function MerchantsListPanel() {
     virtual_account_no: string;
     escrow_ifsc: string;
   } | null>(null);
-  const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [companyBankBalance, setCompanyBankBalance] = useState<number | null>(
+    null,
+  );
   const [editingDemoId, setEditingDemoId] = useState<string | null>(null);
   const [demoDraft, setDemoDraft] = useState('');
   const [savingDemoId, setSavingDemoId] = useState<string | null>(null);
@@ -101,9 +104,10 @@ export function MerchantsListPanel() {
     setError(null);
 
     try {
-      const [usersResponse, pendingResponse] = await Promise.all([
+      const [usersResponse, pendingResponse, bankResponse] = await Promise.all([
         fetch('/api/users', { cache: 'no-store' }),
         fetch('/api/transfers?status=PENDING_APPROVAL', { cache: 'no-store' }),
+        fetch('/api/bank-balance', { cache: 'no-store' }),
       ]);
 
       const usersData = await usersResponse.json();
@@ -132,6 +136,12 @@ export function MerchantsListPanel() {
           counts[transfer.user_id] = (counts[transfer.user_id] ?? 0) + 1;
         }
         setPendingByUser(counts);
+      }
+
+      if (bankResponse.ok) {
+        const bankData = await bankResponse.json();
+        const nextBank = Number(bankData.bank_balance);
+        setCompanyBankBalance(Number.isFinite(nextBank) ? nextBank : null);
       }
     } catch (loadError) {
       setError(
@@ -193,15 +203,6 @@ export function MerchantsListPanel() {
     [merchants],
   );
 
-  const totalBankBalance = useMemo(
-    () =>
-      merchants.reduce(
-        (sum, merchant) => sum + Number(merchant.real_balance ?? 0),
-        0,
-      ),
-    [merchants],
-  );
-
   async function changeMerchantBalanceMode(
     merchant: ManagedMerchant,
     balanceMode: BalanceMode,
@@ -235,48 +236,6 @@ export function MerchantsListPanel() {
       );
     } finally {
       setUpdatingModeId(null);
-    }
-  }
-
-  async function refreshMerchantBalance(merchant: ManagedMerchant) {
-    setRefreshingId(merchant.id);
-
-    try {
-      const response = await fetch(
-        `/api/users/${merchant.id}/refresh-balance`,
-        { method: 'POST' },
-      );
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message ?? 'Failed to fetch real balance');
-      }
-
-      setMerchants((current) =>
-        current.map((row) =>
-          row.id === merchant.id
-            ? {
-                ...row,
-                real_balance: Number(data.real_balance),
-                available_balance:
-                  row.balance_mode === 'real'
-                    ? Math.max(Number(data.real_balance) - row.pending_balance, 0)
-                    : row.available_balance,
-              }
-            : row,
-        ),
-      );
-      toast.success(
-        `${merchant.merchant_name}: ${formatCurrency(Number(data.real_balance))} (bank)`,
-      );
-    } catch (refreshError) {
-      toast.error(
-        refreshError instanceof Error
-          ? refreshError.message
-          : 'Failed to fetch real balance',
-      );
-    } finally {
-      setRefreshingId(null);
     }
   }
 
@@ -417,6 +376,7 @@ export function MerchantsListPanel() {
         description="Open a merchant to approve transfers and manage balances."
         action={
           <div className="flex flex-wrap items-center gap-2">
+            <UserPortalLiveLink />
             <Button
               size="sm"
               onClick={toggleOnboarding}
@@ -473,13 +433,13 @@ export function MerchantsListPanel() {
         <GlassCard>
           <GlassCardContent className="p-5">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Total bank (real)
+              Company bank
             </p>
             <p className="mt-2 text-3xl font-semibold tabular-nums">
-              {isLoading ? '—' : formatCurrency(totalBankBalance)}
+              {isLoading ? '—' : formatCurrency(companyBankBalance ?? 0)}
             </p>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Sum of all merchants
+              HDFC current account · admin only
             </p>
           </GlassCardContent>
         </GlassCard>
@@ -680,7 +640,7 @@ export function MerchantsListPanel() {
                 <thead>
                   <tr className={glassTableHead()}>
                     <th className="px-5 py-3 text-left">Merchant</th>
-                    <th className="px-4 py-3 text-right">Real (bank)</th>
+                    <th className="px-4 py-3 text-right">Collected</th>
                     <th className="px-4 py-3 text-right">Demo (portal)</th>
                     <th className="px-4 py-3 text-right">Pending</th>
                     <th className="px-4 py-3 text-center">Portal</th>
@@ -690,7 +650,6 @@ export function MerchantsListPanel() {
                 <tbody className="divide-y divide-white/50">
                   {filtered.map((merchant) => {
                     const pendingApprovals = pendingByUser[merchant.id] ?? 0;
-                    const isRefreshing = refreshingId === merchant.id;
                     const isEditingDemo = editingDemoId === merchant.id;
                     const isSavingDemo = savingDemoId === merchant.id;
                     const isUpdatingMode = updatingModeId === merchant.id;
@@ -743,7 +702,6 @@ export function MerchantsListPanel() {
                           </div>
                         </td>
                         <td className="px-4 py-3.5 text-right">
-                          <div className="inline-flex items-center justify-end gap-1.5">
                             <span
                               className={
                                 usesReal
@@ -753,21 +711,6 @@ export function MerchantsListPanel() {
                             >
                               {formatCurrency(merchant.real_balance)}
                             </span>
-                            <button
-                              type="button"
-                              disabled={isRefreshing}
-                              aria-label={`Refresh bank balance for ${merchant.merchant_name}`}
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground disabled:opacity-50"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void refreshMerchantBalance(merchant);
-                              }}
-                            >
-                              <RefreshCw
-                                className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
-                              />
-                            </button>
-                          </div>
                         </td>
                         <td className="px-4 py-3.5 text-right">
                           {isEditingDemo ? (

@@ -55,6 +55,16 @@ export interface AdminMerchantListItem {
   updated_at: string;
 }
 
+export interface PublicDeposit {
+  id: string;
+  amount: number;
+  utr: string | null;
+  virtual_account: string;
+  remitter_name: string | null;
+  remitter_account: string | null;
+  created_at: string;
+}
+
 export interface CreateMerchantInput {
   userId: string;
   merchantName: string;

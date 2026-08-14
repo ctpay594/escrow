@@ -161,28 +161,26 @@ export class AdminUsersService {
     };
   }
 
-  async refreshRealBalance(id: string) {
-    const credentials = await this.merchantsService.getDecryptedCredentials(id);
+  async fetchCompanyBankBalance() {
+    const credentials = this.merchantsService.getPlatformCredentials();
     const balanceResult = await this.escrowStackService.fetchTransactionBalance(
       credentials.apiKey,
     );
 
-    await this.merchantsService.updateRealBalanceByUserId(
-      id,
-      balanceResult.balance,
-      {
-        accountNo: balanceResult.accountNo,
-        customerId: balanceResult.customerId,
-        balanceRaw: balanceResult.raw,
-      },
-    );
-
     return {
-      real_balance: balanceResult.balance,
+      bank_balance: balanceResult.balance,
       account_no: balanceResult.accountNo ?? null,
       customer_id: balanceResult.customerId ?? null,
-      message: 'Real balance refreshed from EscrowStack',
+      message: 'Company current-account balance (not a merchant ledger)',
     };
+  }
+
+  listDeposits(userId: string) {
+    return this.merchantsService.listDepositsForUser(userId);
+  }
+
+  async refreshRealBalance(_id: string) {
+    return this.fetchCompanyBankBalance();
   }
 
   async deleteUser(id: string) {

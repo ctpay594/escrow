@@ -17,12 +17,14 @@ export class WebhooksController {
   }
 
   @Get('escrowstack')
-  getEscrowStackStatus() {
+  async getEscrowStackStatus() {
+    await this.webhooksService.replayStoredCollects();
+
     return {
       ok: true,
       status: 'running',
       message:
-        'Callback URL is live. Bank POSTs JSON. We save it in Supabase table: callbacks',
+        'Callback URL is live. Bank POSTs JSON. Collect credits are applied from Virtual Account + Amount.',
       method: 'POST',
       url: '/webhooks/escrowstack',
     };

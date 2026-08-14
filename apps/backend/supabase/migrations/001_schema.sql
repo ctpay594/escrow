@@ -213,11 +213,39 @@ CREATE TABLE IF NOT EXISTS public.callbacks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   from_ip TEXT,
-  body JSONB NOT NULL
+  body JSONB NOT NULL,
+  processed BOOLEAN NOT NULL DEFAULT false,
+  process_result TEXT
 );
+
+ALTER TABLE public.callbacks
+  ADD COLUMN IF NOT EXISTS processed BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS process_result TEXT;
 
 CREATE INDEX IF NOT EXISTS callbacks_received_at_idx
   ON public.callbacks (received_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.deposits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  callback_id UUID REFERENCES public.callbacks(id) ON DELETE SET NULL,
+  merchant_id UUID REFERENCES public.merchants(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  virtual_account TEXT NOT NULL,
+  amount NUMERIC(18, 2) NOT NULL,
+  utr TEXT,
+  dedupe_key TEXT NOT NULL,
+  remitter_name TEXT,
+  remitter_account TEXT,
+  debit_credit TEXT NOT NULL DEFAULT 'Credit',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS deposits_dedupe_key_unique
+  ON public.deposits (dedupe_key);
+CREATE INDEX IF NOT EXISTS deposits_virtual_account_idx
+  ON public.deposits (virtual_account);
+CREATE INDEX IF NOT EXISTS deposits_user_id_idx
+  ON public.deposits (user_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS public.webhook_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

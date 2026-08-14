@@ -98,9 +98,49 @@ export function TransferDetailDialog({
     <Dialog open={!!transfer} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Transfer details</DialogTitle>
+          <DialogTitle>
+            {transfer.kind === 'deposit' ? 'Deposit details' : 'Transfer details'}
+          </DialogTitle>
         </DialogHeader>
         <dl className={cn(glassInset(), 'rounded-xl px-4 py-1 text-sm')}>
+          {transfer.kind === 'deposit' ? (
+            <>
+              <DetailRow label="Type" value="Deposit" />
+              <DetailRow
+                label="From"
+                value={transfer.remitter_name || transfer.beneficiary_account_name}
+              />
+              <DetailRow label="Amount">
+                <span className="font-semibold tabular-nums text-emerald-700">
+                  +{formatCurrency(transfer.amount)}
+                </span>
+              </DetailRow>
+              <DetailRow label="Status">
+                <TransferStatusBadge status={transfer.status} />
+              </DetailRow>
+              <DetailRow label="UTR" mono>
+                {utr ? (
+                  <MonoCopyValue label="UTR" value={utr} />
+                ) : (
+                  '—'
+                )}
+              </DetailRow>
+              <DetailRow
+                label="Remitter account"
+                value={transfer.remitter_account}
+                mono
+              />
+              <DetailRow
+                label="Your VA"
+                value={transfer.virtual_account || transfer.bank_ref}
+                mono
+              />
+              <DetailRow label="Received">
+                {formatDate(transfer.created_at)}
+              </DetailRow>
+            </>
+          ) : (
+            <>
           <DetailRow label="Beneficiary" value={transfer.beneficiary_account_name} />
           <DetailRow label="Amount">
             <span className="font-semibold tabular-nums">
@@ -130,8 +170,10 @@ export function TransferDetailDialog({
           <DetailRow label="Submitted">
             {formatDate(transfer.created_at)}
           </DetailRow>
+            </>
+          )}
         </dl>
-        {onDownloadReceipt ? (
+        {onDownloadReceipt && transfer.kind !== 'deposit' ? (
           <Button
             variant="outline"
             className="w-full"

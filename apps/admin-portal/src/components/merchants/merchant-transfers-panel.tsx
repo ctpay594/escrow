@@ -58,6 +58,7 @@ type TransferStatus =
 
 interface AdminTransfer {
   id: string;
+  kind?: 'payout' | 'deposit';
   batch_id: string | null;
   user_id: string;
   merchant_id: string;
@@ -73,12 +74,64 @@ interface AdminTransfer {
   beneficiary_vpa: string | null;
   payee_user_ref: string | null;
   payee_user_name: string | null;
-  status: TransferStatus;
+  status: TransferStatus | 'CREDITED';
   utr: string | null;
   bank_ref: string | null;
   escrow_response: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+  remitter_name?: string | null;
+  remitter_account?: string | null;
+  virtual_account?: string | null;
+}
+
+interface AdminDeposit {
+  id: string;
+  amount: number;
+  utr: string | null;
+  virtual_account: string;
+  remitter_name: string | null;
+  remitter_account: string | null;
+  created_at: string;
+}
+
+function isDepositRow(transfer: AdminTransfer) {
+  return transfer.kind === 'deposit' || transfer.status === 'CREDITED';
+}
+
+function depositToAdminRow(
+  deposit: AdminDeposit,
+  merchantId: string,
+  merchantName: string,
+): AdminTransfer {
+  return {
+    id: deposit.id,
+    kind: 'deposit',
+    batch_id: null,
+    user_id: merchantId,
+    merchant_id: merchantId,
+    merchant_name: merchantName,
+    username: '',
+    payout_ref: deposit.utr || deposit.virtual_account,
+    amount: Number(deposit.amount),
+    payout_mode: 'COLLECT',
+    transaction_note: deposit.remitter_name,
+    beneficiary_account_name: deposit.remitter_name || 'Incoming deposit',
+    beneficiary_account_no: deposit.remitter_account,
+    beneficiary_ifsc: null,
+    beneficiary_vpa: null,
+    payee_user_ref: null,
+    payee_user_name: null,
+    status: 'CREDITED',
+    utr: deposit.utr,
+    bank_ref: deposit.virtual_account,
+    escrow_response: null,
+    created_at: deposit.created_at,
+    updated_at: deposit.created_at,
+    remitter_name: deposit.remitter_name,
+    remitter_account: deposit.remitter_account,
+    virtual_account: deposit.virtual_account,
+  };
 }
 
 function displayValue(value: string | number | null | undefined) {
@@ -211,20 +264,39 @@ export function MerchantTransfersPanel({
     setError(null);
 
     try {
-      const response = await fetch(
-        `/api/transfers?user_id=${encodeURIComponent(merchantId)}`,
-      );
-      const data = await response.json();
+      const [transfersResponse, depositsResponse] = await Promise.all([
+        fetch(`/api/transfers?user_id=${encodeURIComponent(merchantId)}`),
+        fetch(`/api/users/${encodeURIComponent(merchantId)}/deposits`),
+      ]);
+      const transfersData = await transfersResponse.json();
+      const depositsData = await depositsResponse.json();
 
-      if (redirectToLoginIfUnauthorized(response)) {
+      if (
+        redirectToLoginIfUnauthorized(transfersResponse) ||
+        redirectToLoginIfUnauthorized(depositsResponse)
+      ) {
         return;
       }
 
-      if (!response.ok) {
-        throw new Error(data.message ?? 'Failed to load transfers');
+      if (!transfersResponse.ok) {
+        throw new Error(transfersData.message ?? 'Failed to load transfers');
       }
 
-      setTransfers(data);
+      const payouts = (Array.isArray(transfersData) ? transfersData : []).map(
+        (row: AdminTransfer) => ({ ...row, kind: row.kind ?? 'payout' }),
+      );
+      const deposits = (
+        depositsResponse.ok && Array.isArray(depositsData)
+          ? (depositsData as AdminDeposit[])
+          : []
+      ).map((deposit) => depositToAdminRow(deposit, merchantId, merchantName));
+
+      setTransfers(
+        [...payouts, ...deposits].sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        ),
+      );
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -234,7 +306,7 @@ export function MerchantTransfersPanel({
     } finally {
       setIsLoading(false);
     }
-  }, [merchantId]);
+  }, [merchantId, merchantName]);
 
   useEffect(() => {
     setIsLoading(true);
@@ -245,7 +317,19 @@ export function MerchantTransfersPanel({
     const query = search.trim().toLowerCase();
 
     return transfers.filter((transfer) => {
-      if (statusFilter !== 'all' && transfer.status !== statusFilter) {
+      if (statusFilter === 'CREDITED' && !isDepositRow(transfer)) {
+        return false;
+      }
+
+      if (statusFilter === 'SUCCESS' && isDepositRow(transfer)) {
+        return false;
+      }
+
+      if (
+        statusFilter !== 'all' &&
+        statusFilter !== 'CREDITED' &&
+        transfer.status !== statusFilter
+      ) {
         return false;
       }
 
@@ -257,7 +341,8 @@ export function MerchantTransfersPanel({
         transfer.payout_ref.toLowerCase().includes(query) ||
         utr.toLowerCase().includes(query) ||
         (transfer.beneficiary_account_no ?? '').toLowerCase().includes(query) ||
-        (transfer.beneficiary_ifsc ?? '').toLowerCase().includes(query)
+        (transfer.beneficiary_ifsc ?? '').toLowerCase().includes(query) ||
+        (transfer.virtual_account ?? '').toLowerCase().includes(query)
       );
     });
   }, [transfers, search, statusFilter]);
@@ -472,7 +557,7 @@ export function MerchantTransfersPanel({
         <GlassCardHeader className={`space-y-3 py-3 ${embedded ? 'border-b border-white/50' : 'pb-4'}`}>
           {embedded ? (
             <div className="flex items-center justify-between gap-2">
-              <GlassCardTitle className="text-sm font-medium">Transfers</GlassCardTitle>
+              <GlassCardTitle className="text-sm font-medium">Transactions</GlassCardTitle>
               {pendingCount > 0 ? (
                 <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
                   {pendingCount} pending
@@ -484,7 +569,7 @@ export function MerchantTransfersPanel({
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search beneficiary, ref, UTR, account..."
+                placeholder="Search remitter, beneficiary, UTR…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="bg-white/60 pl-9 backdrop-blur-sm"
@@ -499,6 +584,7 @@ export function MerchantTransfersPanel({
                   <SelectItem value="all">All statuses</SelectItem>
                   <SelectItem value="PENDING_APPROVAL">Pending approval</SelectItem>
                   <SelectItem value="PROCESSING">Processing</SelectItem>
+                  <SelectItem value="CREDITED">Deposits</SelectItem>
                   <SelectItem value="SUCCESS">Completed</SelectItem>
                   <SelectItem value="FAILED">Failed</SelectItem>
                   <SelectItem value="REJECTED">Rejected</SelectItem>
@@ -559,8 +645,8 @@ export function MerchantTransfersPanel({
           ) : filtered.length === 0 ? (
             <EmptyStateIllustrated
               icon={FileText}
-              title="No transfers"
-              description="This merchant has no transfers matching your filters."
+              title="No transactions"
+              description="This merchant has no deposits or transfers matching your filters."
             />
           ) : (
             <>
@@ -572,12 +658,18 @@ export function MerchantTransfersPanel({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <TransferStatusBadge status={transfer.status} />
-                      <p className="font-semibold tabular-nums">
+                      <p className={cn(
+                        'font-semibold tabular-nums',
+                        isDepositRow(transfer) && 'text-emerald-700',
+                      )}>
+                        {isDepositRow(transfer) ? '+' : ''}
                         {formatCurrency(transfer.amount)}
                       </p>
                     </div>
                     <p className="mt-2 font-medium">
-                      {transfer.beneficiary_account_name}
+                      {isDepositRow(transfer)
+                        ? `Deposit · ${transfer.beneficiary_account_name}`
+                        : transfer.beneficiary_account_name}
                     </p>
                     <div className={cn(glassInset(), 'mt-3 space-y-1 px-3 py-2 text-xs')}>
                       <div className="flex justify-between gap-3">
@@ -619,7 +711,7 @@ export function MerchantTransfersPanel({
                   <thead className={glassTableHead()}>
                     <tr>
                       <th className="px-3 py-2.5 text-left font-medium">Date</th>
-                      <th className="px-3 py-2.5 text-left font-medium">Beneficiary</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Party</th>
                       <th className="px-3 py-2.5 text-left font-medium">Payment ref</th>
                       <th className="px-3 py-2.5 text-left font-medium">UTR</th>
                       <th className="px-3 py-2.5 text-right font-medium">Amount</th>
@@ -641,7 +733,9 @@ export function MerchantTransfersPanel({
                           {formatTableDate(transfer.created_at)}
                         </td>
                         <td className="px-3 py-3 font-medium">
-                          {transfer.beneficiary_account_name}
+                          {isDepositRow(transfer)
+                            ? `Deposit · ${transfer.beneficiary_account_name}`
+                            : transfer.beneficiary_account_name}
                         </td>
                         <td className="px-3 py-3 font-mono text-xs">
                           {transfer.payout_ref}
@@ -659,7 +753,11 @@ export function MerchantTransfersPanel({
                             {transferUtrLabel(transfer)}
                           </span>
                         </td>
-                        <td className="px-3 py-3 text-right font-medium tabular-nums">
+                        <td className={cn(
+                          'px-3 py-3 text-right font-medium tabular-nums',
+                          isDepositRow(transfer) && 'text-emerald-700',
+                        )}>
+                          {isDepositRow(transfer) ? '+' : ''}
                           {formatCurrency(transfer.amount)}
                         </td>
                         <td className="px-3 py-3 text-right">
@@ -702,7 +800,7 @@ export function MerchantTransfersPanel({
 
               <div className="mt-6 flex items-center justify-between border-t border-white/50 pt-4">
                 <p className="text-sm text-muted-foreground">
-                  {filtered.length} transfer{filtered.length === 1 ? '' : 's'}
+                  {filtered.length} transaction{filtered.length === 1 ? '' : 's'}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
@@ -734,10 +832,44 @@ export function MerchantTransfersPanel({
       <Dialog open={!!selected} onOpenChange={() => setSelected(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Transfer details</DialogTitle>
+            <DialogTitle>
+              {selected?.kind === 'deposit' ? 'Deposit details' : 'Transfer details'}
+            </DialogTitle>
           </DialogHeader>
           {selected ? (
             <dl className={cn(glassInset(), 'rounded-xl px-4 py-1 text-sm')}>
+              {isDepositRow(selected) ? (
+                <>
+                  <TransferDetailRow label="Type" value="Deposit" />
+                  <TransferDetailRow
+                    label="From"
+                    value={selected.remitter_name || selected.beneficiary_account_name}
+                  />
+                  <TransferDetailRow label="Amount">
+                    <span className="font-semibold tabular-nums text-emerald-700">
+                      +{formatCurrency(selected.amount)}
+                    </span>
+                  </TransferDetailRow>
+                  <TransferDetailRow label="Status">
+                    <TransferStatusBadge status={selected.status} />
+                  </TransferDetailRow>
+                  <TransferDetailRow label="UTR" value={transferUtr(selected)} mono />
+                  <TransferDetailRow
+                    label="Remitter account"
+                    value={selected.remitter_account}
+                    mono
+                  />
+                  <TransferDetailRow
+                    label="Virtual account"
+                    value={selected.virtual_account || selected.bank_ref}
+                    mono
+                  />
+                  <TransferDetailRow label="Received">
+                    {formatDate(selected.created_at)}
+                  </TransferDetailRow>
+                </>
+              ) : (
+                <>
               <TransferDetailRow
                 label="Beneficiary"
                 value={selected.beneficiary_account_name}
@@ -765,6 +897,8 @@ export function MerchantTransfersPanel({
               <TransferDetailRow label="Submitted">
                 {formatDate(selected.created_at)}
               </TransferDetailRow>
+                </>
+              )}
             </dl>
           ) : null}
         </DialogContent>

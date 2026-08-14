@@ -36,6 +36,12 @@ export interface PayoutStatusEntry {
   raw: Record<string, unknown>;
 }
 
+export interface PayoutStatusQuery {
+  payoutRef: string;
+  txnDate: string;
+  mode: string;
+}
+
 export interface PayoutStatusResult {
   entries: PayoutStatusEntry[];
   raw: Record<string, unknown>;

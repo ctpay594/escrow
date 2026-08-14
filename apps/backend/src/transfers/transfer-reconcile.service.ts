@@ -1,18 +1,31 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { TransfersService } from './transfers.service';
 
 const RECONCILE_DELAYS_MS = [
   10_000, 10_000, 15_000, 15_000, 20_000, 30_000, 30_000, 45_000, 60_000,
 ];
+const PERIODIC_RECONCILE_MS = 15 * 60 * 1000;
 
 @Injectable()
-export class TransferReconcileService implements OnModuleDestroy {
+export class TransferReconcileService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TransferReconcileService.name);
   private debounceTimer: NodeJS.Timeout | null = null;
+  private sweepTimer: NodeJS.Timeout | null = null;
+  private intervalTimer: NodeJS.Timeout | null = null;
   private activeLoop = false;
   private shouldRunAgain = false;
 
   constructor(private readonly transfersService: TransfersService) {}
+
+  onModuleInit(): void {
+    this.sweepTimer = setTimeout(() => {
+      this.sweepTimer = null;
+      void this.runLoop();
+    }, 15_000);
+    this.intervalTimer = setInterval(() => {
+      void this.runLoop();
+    }, PERIODIC_RECONCILE_MS);
+  }
 
   scheduleReconcile(): void {
     if (this.debounceTimer) {
@@ -69,6 +82,14 @@ export class TransferReconcileService implements OnModuleDestroy {
   onModuleDestroy(): void {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
+    }
+
+    if (this.sweepTimer) {
+      clearTimeout(this.sweepTimer);
+    }
+
+    if (this.intervalTimer) {
+      clearInterval(this.intervalTimer);
     }
   }
 

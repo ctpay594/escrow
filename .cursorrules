@@ -16,7 +16,7 @@ Custom **B2B Payout and Ledger Management Platform** (closed-loop treasury, not 
 | Admin portal | `/apps/admin-portal` | Next.js, Tailwind | Vercel (`admin.xyz.com`) |
 | Backend | `/apps/backend` | NestJS | Hostinger VPS (`api.xyz.com`, PM2 + Nginx) |
 
-**Database:** Supabase (PostgreSQL). Use SQL migrations in `apps/backend/supabase/migrations/`. Prisma may be added later — currently `@supabase/supabase-js` via service role.
+**Database:** Supabase (PostgreSQL). Schema: `apps/backend/supabase/migrations/001_schema.sql`. Prisma may be added later — currently `@supabase/supabase-js` via service role.
 
 ## Security (non-negotiable)
 
@@ -28,18 +28,22 @@ Custom **B2B Payout and Ledger Management Platform** (closed-loop treasury, not 
 ## EscrowStack API reference (backend only)
 
 **Reference files in repo root:**
+- `Live-Credential.postman_collection.json` — live PT APIs only (payout, get_payout_status, get_account_balance)
 - `payout.cts.txt` — Node signing + payout flow (RSA-SHA256, IST timestamp)
-- `EStack-ESCROW-HDFC Chakrathalwar.postman_collection (1).json` — full Postman collection
 
 **Key endpoints (live passthrough):**
 - Balance: `POST /v1/pt/hdfc/get_account_balance` (base: `cashdfcpt.escrowstack.io`)
 - Payout: `POST /v1/pt/hdfc/payout`
 - Payout status: `POST /v1/pt/hdfc/get_payout_status`
-- Webhooks: `POST https://api.ctpay.tech/webhooks/escrowstack` (logs `callbacks`; ledger credit TBD)
+- Webhooks: `POST https://api.ctpay.tech/webhooks/escrowstack` (collect credits VA ledger; payout status applied or polled)
 
-**Payout payload:** `payouts[]` (payout_ref, amount, payout_mode, payee, beneficiary) + `timestamp` + `signature`. Header: `apikey` (JWT).
+**Payout payload:** `payouts[]` (`payout_ref`, `amount`, `payout_mode`, `transaction_note`, `payee.user_ref`/`user_name`, `beneficiary`) + IST `timestamp` + RSA `signature`. Header: `apikey` (JWT). Do not send both `apikey` and `ApiKey`.
 
-**Payout lifecycle:** `EL_PS` submitted → webhook `processed` (`PO_BP_DCP`) or `failed` (`ERR_BP_IPR`)
+**Payout status payload:** `{ payout_ref, txn_date, mode }`. Response: `data.ALL_RECORDS[]` with `PAYMENTREFNO`, `TXN_STATUS` (`Completed`), `OD_STATUS` (`TXSETT`), `UTR_NO`.
+
+**Payout lifecycle:** submit `EL_PS` → poll/webhook `Completed`/`PO_BP_DCP` → SUCCESS; `failed`/`ERR_BP_IPR` → FAILED
+
+**Webhooks:** `POST /webhooks/escrowstack` — collect credits merchant VA ledger; payout webhooks update transfer status. Polling covers missing payout webhooks.
 
 ## Core money flows
 

@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Bell, ChevronDown, LogOut, Menu, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { AdminLogo } from '@/components/admin-logo';
+import { UserPortalLiveLink } from '@/components/user-portal-live-link';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -92,6 +93,9 @@ export function AdminHeader({ adminUsername, activePath }: AdminHeaderProps) {
         </nav>
 
         <div className="flex items-center gap-2">
+          <UserPortalLiveLink compact className="sm:hidden" />
+          <UserPortalLiveLink className="hidden sm:inline-flex" />
+
           {pendingCount > 0 ? (
             <Button variant="ghost" size="icon" className="relative" aria-label="Pending approvals">
               <Bell className="h-5 w-5" />
@@ -151,6 +155,9 @@ export function AdminHeader({ adminUsername, activePath }: AdminHeaderProps) {
               {label}
             </Button>
           ))}
+          <div className="mt-2 border-t border-border pt-2">
+            <UserPortalLiveLink />
+          </div>
         </div>
       ) : null}
     </header>

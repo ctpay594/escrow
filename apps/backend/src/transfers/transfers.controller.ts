@@ -16,6 +16,11 @@ export class TransfersController {
     return this.transfersService.listTransfersForUser(user.sub);
   }
 
+  @Get('deposits')
+  listDeposits(@CurrentUser() user: JwtPayload) {
+    return this.transfersService.listDepositsForUser(user.sub);
+  }
+
   @Post('bulk')
   createBulkTransfer(
     @CurrentUser() user: JwtPayload,

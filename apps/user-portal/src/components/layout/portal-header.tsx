@@ -6,17 +6,14 @@ import {
   Bell,
   ChevronDown,
   History,
-  KeyRound,
   LogOut,
   Menu,
   Send,
-  Settings,
   User,
   Wallet,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
-import { toast } from 'sonner';
 import { CTPayLogo } from '@/components/ctpay-logo';
 import {
   AccountStatusBadge,
@@ -121,26 +118,22 @@ export function PortalHeader({
             className="relative h-9 w-9"
             aria-label={
               processingCount > 0
-                ? `${processingCount} notifications`
-                : 'Notifications'
+                ? `${processingCount} transfers in progress — open history`
+                : 'Open history'
             }
-            onClick={() =>
-              toast.info(
-                processingCount > 0
-                  ? `${processingCount} transfer(s) in progress`
-                  : 'No new notifications',
-              )
-            }
+            asChild
           >
-            <Bell className="h-4 w-4" />
-            {processingCount > 0 ? (
-              <Badge
-                variant="warning"
-                className="absolute -right-0.5 -top-0.5 h-4 min-w-4 justify-center px-1 text-[10px]"
-              >
-                {processingCount > 9 ? '9+' : processingCount}
-              </Badge>
-            ) : null}
+            <Link href="/history">
+              <Bell className="h-4 w-4" />
+              {processingCount > 0 ? (
+                <Badge
+                  variant="warning"
+                  className="absolute -right-0.5 -top-0.5 h-4 min-w-4 justify-center px-1 text-[10px]"
+                >
+                  {processingCount > 9 ? '9+' : processingCount}
+                </Badge>
+              ) : null}
+            </Link>
           </Button>
 
           <DropdownMenu>
@@ -181,28 +174,14 @@ export function PortalHeader({
               <DropdownMenuItem asChild>
                 <Link href="/">
                   <User className="mr-2 h-4 w-4" />
-                  My profile
+                  Account
                 </Link>
               </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  toast.message('API keys', {
-                    description: 'API key management is admin-only for CTPay.',
-                  })
-                }
-              >
-                <KeyRound className="mr-2 h-4 w-4" />
-                API keys
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  toast.message('Settings', {
-                    description: 'Contact your admin to update account settings.',
-                  })
-                }
-              >
-                <Settings className="mr-2 h-4 w-4" />
-                Settings
+              <DropdownMenuItem asChild>
+                <Link href="/history">
+                  <History className="mr-2 h-4 w-4" />
+                  History
+                </Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem

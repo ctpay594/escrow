@@ -1,5 +1,6 @@
 'use client';
 
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -11,6 +12,7 @@ export function AdminLoginForm() {
   const searchParams = useSearchParams();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -64,17 +66,32 @@ export function AdminLoginForm() {
 
       <div className="space-y-2">
         <Label htmlFor="password">Password</Label>
-        <Input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          minLength={6}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="Enter password"
-        />
+        <div className="relative">
+          <Input
+            id="password"
+            name="password"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="current-password"
+            required
+            minLength={6}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Enter password"
+            className="pr-10"
+          />
+          <button
+            type="button"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
+            onClick={() => setShowPassword((visible) => !visible)}
+          >
+            {showPassword ? (
+              <EyeOff className="h-4 w-4" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -84,7 +101,14 @@ export function AdminLoginForm() {
       ) : null}
 
       <Button type="submit" disabled={isSubmitting} className="w-full">
-        {isSubmitting ? 'Signing in…' : 'Sign in'}
+        {isSubmitting ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Signing in…
+          </>
+        ) : (
+          'Sign in'
+        )}
       </Button>
     </form>
   );

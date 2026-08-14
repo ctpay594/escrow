@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronRight, Pencil, Plus, RefreshCw, Search, Users } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -75,11 +75,13 @@ function redirectToLoginIfUnauthorized(response: Response): boolean {
 
 export function MerchantsListPanel() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [merchants, setMerchants] = useState<ManagedMerchant[]>([]);
   const [pendingByUser, setPendingByUser] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [pendingOnly, setPendingOnly] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [newMerchantName, setNewMerchantName] = useState('');
@@ -159,6 +161,10 @@ export function MerchantsListPanel() {
   }, [loadData]);
 
   useEffect(() => {
+    setPendingOnly(searchParams.get('needsApproval') === '1');
+  }, [searchParams]);
+
+  useEffect(() => {
     const name = newMerchantName.trim();
     if (!onboardingOpen) {
       return;
@@ -180,14 +186,20 @@ export function MerchantsListPanel() {
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return merchants;
 
-    return merchants.filter(
-      (merchant) =>
+    return merchants.filter((merchant) => {
+      if (pendingOnly && (pendingByUser[merchant.id] ?? 0) === 0) {
+        return false;
+      }
+
+      if (!query) return true;
+
+      return (
         merchant.merchant_name.toLowerCase().includes(query) ||
-        merchant.username.toLowerCase().includes(query),
-    );
-  }, [merchants, search]);
+        merchant.username.toLowerCase().includes(query)
+      );
+    });
+  }, [merchants, search, pendingOnly, pendingByUser]);
 
   const totalPendingApprovals = useMemo(
     () => Object.values(pendingByUser).reduce((sum, count) => sum + count, 0),
@@ -202,6 +214,11 @@ export function MerchantsListPanel() {
       ),
     [merchants],
   );
+
+  function applyPendingOnly(value: boolean) {
+    setPendingOnly(value);
+    router.replace(value ? '/?needsApproval=1' : '/', { scroll: false });
+  }
 
   async function changeMerchantBalanceMode(
     merchant: ManagedMerchant,
@@ -404,19 +421,30 @@ export function MerchantsListPanel() {
             <p className="mt-1 text-[11px] text-muted-foreground">On platform</p>
           </GlassCardContent>
         </GlassCard>
-        <GlassCard>
-          <GlassCardContent className="p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Pending approvals
-            </p>
-            <p className="mt-2 text-3xl font-semibold tabular-nums">
-              {isLoading ? '—' : totalPendingApprovals}
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Transfers awaiting action
-            </p>
-          </GlassCardContent>
-        </GlassCard>
+        <button
+          type="button"
+          className={cn(
+            'text-left transition-shadow',
+            pendingOnly && 'ring-2 ring-amber-400/80',
+          )}
+          onClick={() => applyPendingOnly(!pendingOnly)}
+        >
+          <GlassCard className="h-full">
+            <GlassCardContent className="p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Pending approvals
+              </p>
+              <p className="mt-2 text-3xl font-semibold tabular-nums">
+                {isLoading ? '—' : totalPendingApprovals}
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {pendingOnly
+                  ? 'Showing merchants that need action · click to clear'
+                  : 'Click to filter merchants awaiting action'}
+              </p>
+            </GlassCardContent>
+          </GlassCard>
+        </button>
         <GlassCard>
           <GlassCardContent className="p-5">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -590,17 +618,31 @@ export function MerchantsListPanel() {
             <p className="mt-0.5 text-sm text-muted-foreground">
               {isLoading
                 ? 'Loading…'
-                : `${filtered.length} merchant${filtered.length === 1 ? '' : 's'} · click a row to open`}
+                : pendingOnly
+                  ? `${filtered.length} with pending approvals · click a row to open`
+                  : `${filtered.length} merchant${filtered.length === 1 ? '' : 's'} · click a row to open`}
             </p>
           </div>
-          <div className="relative w-full sm:max-w-xs">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search merchants..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-9 bg-white/60 pl-9 backdrop-blur-sm"
-            />
+          <div className="flex w-full flex-col gap-2 sm:max-w-xs">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search merchants..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="h-9 bg-white/60 pl-9 backdrop-blur-sm"
+              />
+            </div>
+            {pendingOnly ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => applyPendingOnly(false)}
+              >
+                Clear pending filter
+              </Button>
+            ) : null}
           </div>
         </GlassCardHeader>
         <GlassCardContent className="p-0">
@@ -618,11 +660,19 @@ export function MerchantsListPanel() {
             <div className="p-5">
               <EmptyStateIllustrated
                 icon={Users}
-                title={merchants.length === 0 ? 'No merchants yet' : 'No matches'}
+                title={
+                  merchants.length === 0
+                    ? 'No merchants yet'
+                    : pendingOnly
+                      ? 'No pending approvals'
+                      : 'No matches'
+                }
                 description={
                   merchants.length === 0
                     ? 'Onboard your first merchant to get started.'
-                    : 'Try a different search term.'
+                    : pendingOnly
+                      ? 'No merchants currently have transfers waiting for approval.'
+                      : 'Try a different search term.'
                 }
                 action={
                   merchants.length === 0 ? (

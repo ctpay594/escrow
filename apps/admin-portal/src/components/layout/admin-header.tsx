@@ -96,12 +96,22 @@ export function AdminHeader({ adminUsername, activePath }: AdminHeaderProps) {
           <UserPortalLiveLink compact className="sm:hidden" />
           <UserPortalLiveLink className="hidden sm:inline-flex" />
 
-          {pendingCount > 0 ? (
-            <Button variant="ghost" size="icon" className="relative" aria-label="Pending approvals">
-              <Bell className="h-5 w-5" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="relative"
+            aria-label={
+              pendingCount > 0
+                ? `${pendingCount} pending approvals`
+                : 'Pending approvals'
+            }
+            onClick={() => router.push('/?needsApproval=1')}
+          >
+            <Bell className="h-5 w-5" />
+            {pendingCount > 0 ? (
               <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-amber-500" />
-            </Button>
-          ) : null}
+            ) : null}
+          </Button>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -157,6 +167,22 @@ export function AdminHeader({ adminUsername, activePath }: AdminHeaderProps) {
           ))}
           <div className="mt-2 border-t border-border pt-2">
             <UserPortalLiveLink />
+            <Button
+              variant="ghost"
+              className="mb-1 w-full justify-start gap-2"
+              onClick={() => {
+                setMobileOpen(false);
+                router.push('/?needsApproval=1');
+              }}
+            >
+              <Bell className="h-4 w-4" />
+              Pending approvals
+              {pendingCount > 0 ? (
+                <Badge variant="warning" className="ml-auto px-1.5 py-0 text-[10px]">
+                  {pendingCount}
+                </Badge>
+              ) : null}
+            </Button>
           </div>
         </div>
       ) : null}

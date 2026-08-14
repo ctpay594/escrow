@@ -47,14 +47,24 @@ import type { DepositItem, TransferItem } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 8;
-const LAST_48_HOURS_MS = 48 * 60 * 60 * 1000;
+
+type HistoryPeriod = '48h' | '7d' | 'all';
+
+const PERIOD_LABEL: Record<HistoryPeriod, string> = {
+  '48h': 'Last 48 hours',
+  '7d': 'Last 7 days',
+  all: 'All time',
+};
+
+function isWithinPeriod(value: string, period: HistoryPeriod) {
+  if (period === 'all') return true;
+  const windowMs =
+    period === '48h' ? 48 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+  return Date.now() - new Date(value).getTime() <= windowMs;
+}
 
 interface HistoryPanelProps {
   accountLabel: string;
-}
-
-function isWithinLast48Hours(value: string) {
-  return Date.now() - new Date(value).getTime() <= LAST_48_HOURS_MS;
 }
 
 function isProcessingStatus(status: string) {
@@ -91,6 +101,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [period, setPeriod] = useState<HistoryPeriod>('7d');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<TransferItem | null>(null);
   const autoCheckedRef = useRef(false);
@@ -219,7 +230,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
     const query = search.trim().toLowerCase();
 
     return transfers.filter((transfer) => {
-      if (!isWithinLast48Hours(transfer.created_at)) {
+      if (!isWithinPeriod(transfer.created_at, period)) {
         return false;
       }
 
@@ -256,7 +267,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
         (transfer.virtual_account ?? '').toLowerCase().includes(query)
       );
     });
-  }, [transfers, search, statusFilter]);
+  }, [transfers, search, statusFilter, period]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice(
@@ -266,7 +277,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter]);
+  }, [search, statusFilter, period]);
 
   function downloadReceipt(transfer: TransferItem) {
     if (isDepositRow(transfer)) {
@@ -289,7 +300,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
     <div className="space-y-6">
       <PageHeader
         title="History"
-        description="Last 48 hours · deposits and transfers"
+        description={`${PERIOD_LABEL[period]} · deposits and transfers`}
         action={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -305,7 +316,11 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
             <DropdownMenuContent align="end">
               <DropdownMenuItem
                 onClick={() => {
-                  exportTransfersCsv(filtered, accountLabel);
+                  exportTransfersCsv(
+                    filtered,
+                    accountLabel,
+                    PERIOD_LABEL[period],
+                  );
                   toast.success('CSV exported');
                 }}
               >
@@ -313,20 +328,15 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  exportTransfersCsv(filtered, accountLabel);
+                  exportTransfersCsv(
+                    filtered,
+                    accountLabel,
+                    PERIOD_LABEL[period],
+                  );
                   toast.success('Excel-compatible CSV exported');
                 }}
               >
                 Export Excel (.csv)
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  toast.message('PDF export', {
-                    description: 'PDF statements will be available in a future release.',
-                  })
-                }
-              >
-                Export PDF (soon)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -347,6 +357,19 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
               />
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
+              <Select
+                value={period}
+                onValueChange={(value) => setPeriod(value as HistoryPeriod)}
+              >
+                <SelectTrigger className="w-full sm:w-[148px]" aria-label="Filter by period">
+                  <SelectValue placeholder="Period" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="48h">Last 48 hours</SelectItem>
+                  <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                </SelectContent>
+              </Select>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-full sm:w-[148px]" aria-label="Filter by status">
                   <SelectValue placeholder="Status" />
@@ -354,11 +377,10 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
                   <SelectItem value="processing">Processing</SelectItem>
-                  <SelectItem value="PENDING_APPROVAL">Pending approval</SelectItem>
                   <SelectItem value="CREDITED">Deposits</SelectItem>
                   <SelectItem value="SUCCESS">Completed</SelectItem>
                   <SelectItem value="FAILED">Failed</SelectItem>
-                  <SelectItem value="REJECTED">Rejected</SelectItem>
+                  <SelectItem value="REJECTED">Cancelled</SelectItem>
                 </SelectContent>
               </Select>
               <Button
@@ -376,7 +398,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
           </div>
           {hasInFlightTransfers ? (
             <p className="text-xs text-muted-foreground">
-              Bank UTR may take a minute after approval.
+              Bank UTR may take a minute to appear.
             </p>
           ) : null}
         </div>
@@ -403,8 +425,8 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
               title="No transactions found"
               description={
                 transfers.length === 0
-                  ? 'Deposits and transfers from the last 48 hours will appear here.'
-                  : 'Try adjusting your search or filters.'
+                  ? 'Deposits and transfers will appear here.'
+                  : 'Try a different period, search, or status filter.'
               }
             />
             </div>
@@ -535,7 +557,8 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
 
               <div className="flex items-center justify-between border-t border-white/50 px-5 py-4">
                 <p className="text-sm text-muted-foreground">
-                  Last 48 hrs · {filtered.length} transaction{filtered.length === 1 ? '' : 's'}
+                  {PERIOD_LABEL[period]} · {filtered.length} transaction
+                  {filtered.length === 1 ? '' : 's'}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button

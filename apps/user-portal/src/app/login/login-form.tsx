@@ -112,7 +112,7 @@ export function LoginForm() {
       </Button>
 
       <p className="text-center text-xs text-muted-foreground">
-        Forgot your password? Contact your admin to reset credentials.
+        Forgot your password? Contact support to reset credentials.
       </p>
     </form>
   );

@@ -32,7 +32,7 @@ export default async function LoginPage() {
             Business payments platform
           </p>
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">
-            Secure payouts. Fast approvals.
+            Secure payouts. Fast settlement.
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Real-time settlement for your merchant treasury.

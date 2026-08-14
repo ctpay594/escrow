@@ -14,9 +14,12 @@ function slugForFilename(value: string) {
     .slice(0, 40);
 }
 
-export function buildStatementFilename(accountLabel: string) {
+export function buildStatementFilename(
+  accountLabel: string,
+  periodSlug = 'last-7days',
+) {
   const slug = slugForFilename(accountLabel) || 'account';
-  return `CTPay-statement-${slug}-last-48hrs-${statementDate()}.csv`;
+  return `CTPay-statement-${slug}-${periodSlug}-${statementDate()}.csv`;
 }
 
 /** Keeps long numeric IDs readable when opened in Excel (avoids scientific notation). */
@@ -37,6 +40,7 @@ function csvCell(value: string | number) {
 export function exportTransfersCsv(
   transfers: TransferItem[],
   accountLabel: string,
+  periodLabel = 'Last 7 days',
 ) {
   const headers = [
     'Date',
@@ -53,7 +57,7 @@ export function exportTransfersCsv(
 
   const metaRows = [
     ['Account', accountLabel],
-    ['Period', 'Last 48 hours'],
+    ['Period', periodLabel],
     ['Generated', formatDate(new Date().toISOString())],
     [],
   ];
@@ -90,7 +94,10 @@ export function exportTransfersCsv(
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = buildStatementFilename(accountLabel);
+  link.download = buildStatementFilename(
+    accountLabel,
+    periodLabel.toLowerCase().replace(/\s+/g, '-'),
+  );
   link.click();
   URL.revokeObjectURL(url);
 }

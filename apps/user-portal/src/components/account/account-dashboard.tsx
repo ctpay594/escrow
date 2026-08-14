@@ -16,11 +16,12 @@ import {
   GlassCardContent,
 } from '@/components/ui/glass-card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatCurrency } from '@/lib/format';
+import { formatCurrency, formatTableDate } from '@/lib/format';
 import { glassInset } from '@/lib/glass-styles';
 import type { DepositItem, MerchantProfile, SessionUser, TransferItem } from '@/lib/types';
-import { depositToHistoryRow } from '@/lib/deposit-display';
+import { depositToHistoryRow, isDepositRow } from '@/lib/deposit-display';
 import { cn } from '@/lib/utils';
+import { TransferStatusBadge } from '@/components/shared/transfer-status-badge';
 
 interface AccountDashboardProps {
   user: SessionUser;
@@ -142,8 +143,13 @@ export function AccountDashboard({
   const snapshot = useMemo(() => {
     const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
-    const settledToday = transfers
-      .filter((t) => t.status === 'SUCCESS' && isToday(t.created_at))
+    const paidOutToday = transfers
+      .filter(
+        (t) =>
+          t.kind !== 'deposit' &&
+          t.status === 'SUCCESS' &&
+          isToday(t.created_at),
+      )
       .reduce((sum, t) => sum + t.amount, 0);
 
     const collectedToday = transfers
@@ -158,12 +164,13 @@ export function AccountDashboard({
 
     const completedThisWeek = transfers.filter(
       (t) =>
+        t.kind !== 'deposit' &&
         t.status === 'SUCCESS' &&
         new Date(t.created_at).getTime() >= weekAgo,
     ).length;
 
     return {
-      settledToday,
+      paidOutToday,
       collectedToday,
       awaitingApproval,
       inProgress,
@@ -239,29 +246,21 @@ export function AccountDashboard({
               </p>
               {snapshot.awaitingApproval + snapshot.inProgress > 0 ? (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {snapshot.awaitingApproval > 0
-                    ? `${snapshot.awaitingApproval} awaiting approval`
-                    : null}
-                  {snapshot.awaitingApproval > 0 && snapshot.inProgress > 0
-                    ? ' · '
-                    : null}
-                  {snapshot.inProgress > 0
-                    ? `${snapshot.inProgress} processing`
-                    : null}
+                  {snapshot.awaitingApproval + snapshot.inProgress} processing
                 </p>
               ) : null}
             </div>
             <div className={cn(glassInset(), 'px-4 py-3')}>
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Settled today
+                Paid out today
               </p>
               <p className="mt-1 text-xl font-semibold tabular-nums">
-                {formatCurrency(snapshot.settledToday)}
+                {formatCurrency(snapshot.paidOutToday)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {snapshot.completedThisWeek} payouts this week
+                {snapshot.completedThisWeek} payout{snapshot.completedThisWeek === 1 ? '' : 's'} this week
                 {snapshot.collectedToday > 0
-                  ? ` · collected ${formatCurrency(snapshot.collectedToday)} today`
+                  ? ` · collected ${formatCurrency(snapshot.collectedToday)}`
                   : ''}
               </p>
             </div>
@@ -295,6 +294,56 @@ export function AccountDashboard({
               value={merchant.virtual_account_no ?? '—'}
             />
             <CopyField label="IFSC" value={merchant.escrow_ifsc ?? '—'} />
+          </div>
+
+          <div className="border-t border-white/50 pt-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-sm font-medium text-foreground">Recent activity</p>
+              {transfers.length > 0 ? (
+                <Button asChild variant="ghost" size="sm" className="h-8 px-2 text-xs">
+                  <Link href="/history">View all</Link>
+                </Button>
+              ) : null}
+            </div>
+            {transfers.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Deposits and payouts will show up here.
+              </p>
+            ) : (
+              <ul className="divide-y divide-white/50">
+                {transfers.slice(0, 5).map((row) => (
+                  <li key={row.id}>
+                    <Link
+                      href="/history"
+                      className="flex items-center justify-between gap-3 py-2.5 text-sm transition-colors hover:text-foreground"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">
+                          {isDepositRow(row)
+                            ? `Deposit · ${row.beneficiary_account_name}`
+                            : row.beneficiary_account_name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatTableDate(row.created_at)}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <span
+                          className={cn(
+                            'tabular-nums font-medium',
+                            isDepositRow(row) && 'text-emerald-700',
+                          )}
+                        >
+                          {isDepositRow(row) ? '+' : '−'}
+                          {formatCurrency(row.amount)}
+                        </span>
+                        <TransferStatusBadge status={row.status} />
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className={cn(glassInset(), 'px-4 py-3 text-sm text-muted-foreground')}>

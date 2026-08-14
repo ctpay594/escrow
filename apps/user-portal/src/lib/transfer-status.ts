@@ -12,7 +12,7 @@ export const transferStatusVariant: Record<string, BadgeProps['variant']> = {
 export function userTransferStatus(status: string): string {
   switch (status) {
     case 'PENDING_APPROVAL':
-      return 'Pending approval';
+      return 'Processing';
     case 'PROCESSING':
       return 'Processing';
     case 'SUCCESS':

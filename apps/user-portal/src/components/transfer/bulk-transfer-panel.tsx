@@ -155,7 +155,7 @@ export function BulkTransferPanel({
       }
 
       toast.success(
-        `${data.transfer_count} transfers submitted for admin approval`,
+        `${data.transfer_count} transfers submitted`,
       );
       setPreviewOpen(false);
       setRows([]);
@@ -181,8 +181,8 @@ export function BulkTransferPanel({
         <GlassCardHeader className="pb-3">
           <GlassCardTitle className="text-base">Bulk transfer</GlassCardTitle>
           <GlassCardDescription>
-            Upload an Excel or CSV file with beneficiary name, account number,
-            IFSC, and amount.
+            Upload Excel or CSV (name, account, IFSC, amount). Transfers are
+            processed after you submit.
           </GlassCardDescription>
         </GlassCardHeader>
         <GlassCardContent className="space-y-4">

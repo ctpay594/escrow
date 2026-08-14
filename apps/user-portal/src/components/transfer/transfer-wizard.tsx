@@ -122,7 +122,7 @@ export function TransferWizard({
       setCompletedBeneficiary(beneficiaryName.trim());
       setCompletedAmount(parsedAmount);
       setSubmitted(true);
-      toast.success('Transfer submitted successfully');
+      toast.success('Transfer submitted');
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : 'Transfer could not be completed',
@@ -150,8 +150,8 @@ export function TransferWizard({
           </GlassCardTitle>
           <GlassCardDescription>
             {submitted
-              ? 'Your transfer has been queued for processing.'
-              : `Available: ${formatCurrency(availableBalance)} · IMPS · No transfer fee`}
+              ? 'Your transfer is processing.'
+              : `Available ${formatCurrency(availableBalance)} · IMPS`}
           </GlassCardDescription>
         </GlassCardHeader>
         <GlassCardContent className="p-5 pt-0">
@@ -305,8 +305,9 @@ export function TransferWizard({
                 >
                   <CheckCircle2 className="h-12 w-12 text-emerald-500" />
                   <p className="mt-4 text-lg font-semibold">Transfer submitted</p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {completedBeneficiary} · {formatCurrency(completedAmount)}
+                  <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+                    {completedBeneficiary} · {formatCurrency(completedAmount)}.
+                    This payout is now processing.
                   </p>
                   <p className="mt-3 text-xs text-muted-foreground">Payment ref</p>
                   <p className="mt-1 font-mono text-sm">{completedRef}</p>

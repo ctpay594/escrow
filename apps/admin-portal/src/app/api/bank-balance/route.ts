@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { backendFetch, errorStatusFromMessage } from '@/lib/api';
 import { ADMIN_SESSION_COOKIE } from '@/lib/constants';
 
+export const dynamic = 'force-dynamic';
+
 async function getAdminToken(): Promise<string | null> {
   const cookieStore = await cookies();
   return cookieStore.get(ADMIN_SESSION_COOKIE)?.value ?? null;

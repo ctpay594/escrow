@@ -97,19 +97,62 @@ export function MerchantsListPanel() {
   const [companyBankBalance, setCompanyBankBalance] = useState<number | null>(
     null,
   );
+  const [companyBankError, setCompanyBankError] = useState<string | null>(null);
+  const [companyBankLoading, setCompanyBankLoading] = useState(true);
   const [editingDemoId, setEditingDemoId] = useState<string | null>(null);
   const [demoDraft, setDemoDraft] = useState('');
   const [savingDemoId, setSavingDemoId] = useState<string | null>(null);
   const [updatingModeId, setUpdatingModeId] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
-    setError(null);
+  const loadCompanyBankBalance = useCallback(async () => {
+    setCompanyBankLoading(true);
+    setCompanyBankError(null);
 
     try {
-      const [usersResponse, pendingResponse, bankResponse] = await Promise.all([
+      const bankResponse = await fetch('/api/bank-balance', {
+        cache: 'no-store',
+      });
+      const bankData = await bankResponse.json().catch(() => ({}));
+
+      if (redirectToLoginIfUnauthorized(bankResponse)) {
+        return;
+      }
+
+      if (!bankResponse.ok) {
+        throw new Error(
+          typeof bankData.message === 'string'
+            ? bankData.message
+            : 'Failed to load company bank balance',
+        );
+      }
+
+      const nextBank = Number(bankData.bank_balance);
+
+      if (!Number.isFinite(nextBank)) {
+        throw new Error('Company bank balance response was not a number');
+      }
+
+      setCompanyBankBalance(nextBank);
+    } catch (bankError) {
+      setCompanyBankBalance(null);
+      setCompanyBankError(
+        bankError instanceof Error
+          ? bankError.message
+          : 'Failed to load company bank balance',
+      );
+    } finally {
+      setCompanyBankLoading(false);
+    }
+  }, []);
+
+  const loadData = useCallback(async () => {
+    setError(null);
+    void loadCompanyBankBalance();
+
+    try {
+      const [usersResponse, pendingResponse] = await Promise.all([
         fetch('/api/users', { cache: 'no-store' }),
         fetch('/api/transfers?status=PENDING_APPROVAL', { cache: 'no-store' }),
-        fetch('/api/bank-balance', { cache: 'no-store' }),
       ]);
 
       const usersData = await usersResponse.json();
@@ -139,12 +182,6 @@ export function MerchantsListPanel() {
         }
         setPendingByUser(counts);
       }
-
-      if (bankResponse.ok) {
-        const bankData = await bankResponse.json();
-        const nextBank = Number(bankData.bank_balance);
-        setCompanyBankBalance(Number.isFinite(nextBank) ? nextBank : null);
-      }
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -154,7 +191,7 @@ export function MerchantsListPanel() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [loadCompanyBankBalance]);
 
   useEffect(() => {
     void loadData();
@@ -460,14 +497,35 @@ export function MerchantsListPanel() {
         </GlassCard>
         <GlassCard>
           <GlassCardContent className="p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Company bank
-            </p>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Company bank
+              </p>
+              <button
+                type="button"
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => void loadCompanyBankBalance()}
+                aria-label="Refresh company bank balance"
+              >
+                <RefreshCw
+                  className={cn(
+                    'h-3.5 w-3.5',
+                    companyBankLoading && 'animate-spin',
+                  )}
+                />
+              </button>
+            </div>
             <p className="mt-2 text-3xl font-semibold tabular-nums">
-              {isLoading ? '—' : formatCurrency(companyBankBalance ?? 0)}
+              {companyBankLoading
+                ? '—'
+                : companyBankBalance == null
+                  ? '—'
+                  : formatCurrency(companyBankBalance)}
             </p>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              HDFC current account · admin only
+              {companyBankError
+                ? companyBankError
+                : 'HDFC current account · admin only'}
             </p>
           </GlassCardContent>
         </GlassCard>

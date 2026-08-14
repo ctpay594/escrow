@@ -221,6 +221,41 @@ export class EscrowStackService {
     path: string,
     body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.postOnce(apiKey, path, body);
+      } catch (error) {
+        lastError = error;
+
+        if (error instanceof BadGatewayException) {
+          throw error;
+        }
+
+        if (!this.isRetryableNetworkError(error) || attempt === 3) {
+          break;
+        }
+
+        this.logger.warn(
+          `EscrowStack ${path} attempt ${attempt} failed (${this.networkErrorMessage(error)}); retrying`,
+        );
+        await this.delay(250 * attempt);
+      }
+    }
+
+    const message = this.networkErrorMessage(lastError);
+    this.logger.error(`EscrowStack ${path} failed: ${message}`);
+    throw new BadGatewayException(message);
+  }
+
+  private async postOnce(
+    apiKey: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    // Live collection: POST {{live}}/v1/pt/hdfc/* with header `apikey` only
+    // (do not also send ApiKey). Get Account Balance body is {}.
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: {
@@ -245,6 +280,42 @@ export class EscrowStackService {
     }
 
     return data;
+  }
+
+  private isRetryableNetworkError(error: unknown): boolean {
+    if (error instanceof BadGatewayException) {
+      return false;
+    }
+
+    const message = this.networkErrorMessage(error).toLowerCase();
+
+    return (
+      message.includes('fetch failed') ||
+      message.includes('timeout') ||
+      message.includes('timed out') ||
+      message.includes('econnreset') ||
+      message.includes('econnrefused') ||
+      message.includes('enotfound') ||
+      message.includes('socket') ||
+      message.includes('ssl') ||
+      message.includes('tls')
+    );
+  }
+
+  private networkErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      const cause =
+        error.cause instanceof Error ? ` (${error.cause.message})` : '';
+      return `${error.message}${cause}`;
+    }
+
+    return 'EscrowStack request failed';
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
   }
 
   private extractBalance(response: Record<string, unknown>): number {

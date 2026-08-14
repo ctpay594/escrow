@@ -55,7 +55,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       { message },
-      { status: errorStatusFromMessage(message) === 401 ? 401 : 400 },
+      { status: errorStatusFromMessage(message) },
     );
   }
 }

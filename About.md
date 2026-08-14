@@ -69,7 +69,7 @@ Both frontends are **Next.js** apps that call the backend through **same-origin 
 
 ## Database (Supabase)
 
-Run migrations **in order** (`001` … `016`). Local Mac setup: [`MAC.md`](MAC.md).
+Run `apps/backend/supabase/migrations/001_schema.sql` in the SQL Editor. Local Mac setup: [`MAC.md`](MAC.md).
 
 | Migration | Purpose |
 |-----------|---------|
@@ -360,7 +360,7 @@ pnpm dev:admin     # :3002
 
 Copy `apps/backend/.env.example` → `apps/backend/.env` and set Supabase, JWT, EscrowStack (`ESCROWSTACK_API_KEY`, `ESCROWSTACK_PRIVATE_KEY`), `CORS_ORIGIN`. Frontends need no `.env` locally.
 
-Create admin in Supabase `admins` table (see above). Run migrations `001`–`016`.
+Create admin in Supabase `admins` table (see above). Run `001_schema.sql`.
 
 ---
 

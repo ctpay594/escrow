@@ -17,6 +17,9 @@ import type {
 const MERCHANT_PROFILE_SELECT =
   'merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, real_balance, demo_balance, balance_mode, account_status, escrow_account_details';
 
+const MERCHANT_PROFILE_BASIC_SELECT =
+  'merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, escrow_account_details';
+
 @Injectable()
 export class MerchantsService {
   constructor(
@@ -94,7 +97,7 @@ export class MerchantsService {
   }
 
   async create(input: CreateMerchantInput): Promise<PublicMerchantProfile> {
-    const payload = {
+    const payload: Record<string, unknown> = {
       user_id: input.userId,
       merchant_name: input.merchantName,
       user_ref: input.userRef ?? null,
@@ -107,12 +110,7 @@ export class MerchantsService {
       escrow_account_details: input.escrowAccountDetails,
     };
 
-    const { data, error } = await this.supabaseService
-      .getAdminClient()
-      .from('merchants')
-      .insert(payload)
-      .select(MERCHANT_PROFILE_SELECT)
-      .single();
+    const { data, error } = await this.insertMerchantRow(payload);
 
     if (error || !data) {
       throw new InternalServerErrorException(
@@ -121,6 +119,91 @@ export class MerchantsService {
     }
 
     return this.toPublicProfile(data as MerchantProfileRow);
+  }
+
+  private async insertMerchantRow(payload: Record<string, unknown>): Promise<{
+    data: MerchantProfileRow | null;
+    error: { message?: string } | null;
+  }> {
+    const client = this.supabaseService.getAdminClient();
+    const attempts: Array<{
+      row: Record<string, unknown>;
+      select: string;
+    }> = [
+      { row: payload, select: MERCHANT_PROFILE_SELECT },
+      {
+        row: {
+          ...payload,
+          encrypted_api_key: 'platform',
+          encrypted_private_key: 'platform',
+        },
+        select: MERCHANT_PROFILE_SELECT,
+      },
+      { row: payload, select: MERCHANT_PROFILE_BASIC_SELECT },
+      {
+        row: {
+          ...payload,
+          encrypted_api_key: 'platform',
+          encrypted_private_key: 'platform',
+        },
+        select: MERCHANT_PROFILE_BASIC_SELECT,
+      },
+      {
+        row: this.withoutOptionalBalanceColumns(payload),
+        select: MERCHANT_PROFILE_BASIC_SELECT,
+      },
+      {
+        row: {
+          ...this.withoutOptionalBalanceColumns(payload),
+          encrypted_api_key: 'platform',
+          encrypted_private_key: 'platform',
+        },
+        select: MERCHANT_PROFILE_BASIC_SELECT,
+      },
+    ];
+
+    let lastError: { message?: string } | null = null;
+
+    for (const attempt of attempts) {
+      const result = await client
+        .from('merchants')
+        .insert(attempt.row)
+        .select(attempt.select)
+        .single();
+
+      if (!result.error && result.data) {
+        return {
+          data: result.data as MerchantProfileRow,
+          error: null,
+        };
+      }
+
+      lastError = result.error;
+      const message = result.error?.message ?? '';
+
+      if (
+        !/encrypted_api_key|encrypted_private_key/i.test(message) &&
+        !this.isMissingBalanceColumnError(message)
+      ) {
+        break;
+      }
+    }
+
+    return { data: null, error: lastError };
+  }
+
+  private withoutOptionalBalanceColumns(
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const {
+      real_balance: _realBalance,
+      demo_balance: _demoBalance,
+      balance_mode: _balanceMode,
+      account_status: _accountStatus,
+      ...rest
+    } = payload;
+
+    return rest;
   }
 
   async findPublicProfileByUserId(
@@ -233,10 +316,10 @@ export class MerchantsService {
         merchantsQuery.error &&
         this.isMissingBalanceColumnError(merchantsQuery.error.message)
       ) {
-        merchantsQuery = await client
+        merchantsQuery = (await client
           .from('merchants')
           .select(basicSelect)
-          .in('user_id', userIds);
+          .in('user_id', userIds)) as typeof merchantsQuery;
       }
 
       if (merchantsQuery.error) {

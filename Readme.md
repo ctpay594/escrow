@@ -94,14 +94,9 @@ pnpm install
 
 Copy `apps/backend/.env.example` → `apps/backend/.env` and fill Supabase + JWT + EscrowStack fields. See [`MAC.md`](MAC.md) for the full list.
 
-### 3. Migrations (Supabase SQL Editor, in order)
+### 3. Schema (Supabase SQL Editor)
 
-`001` … `016` in `apps/backend/supabase/migrations/`
-
-Latest that matter for current code:
-
-- **015** — unique virtual account  
-- **016** — drop per-merchant encrypted key columns  
+Run once (safe to re-run): `apps/backend/supabase/migrations/001_schema.sql`  
 
 ### 4. Admin user
 

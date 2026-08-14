@@ -42,9 +42,7 @@ Browsers only talk to Vercel. Vercel server routes call the backend using `API_U
 ## Step 1 — Supabase (database)
 
 1. Create a Supabase project.
-2. Open **SQL Editor** and run migrations **in order** from `apps/backend/supabase/migrations/`:
-
-   `001` → `002` → `003` → `004` → `005` → `006` → `007` → `008` → `009` → `010` → `011` → `012` → `013` → `014` → `015` → `016`
+2. Open **SQL Editor** and run `apps/backend/supabase/migrations/001_schema.sql` (safe to re-run).
 
    **016** is required: platform EscrowStack keys live in VPS `.env`, not merchant rows.
 

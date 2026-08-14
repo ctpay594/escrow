@@ -159,7 +159,9 @@ When not `active`:
 
 **Services:** `apps/backend/src/escrowstack/`
 
-- Balance: `POST /v1/escrow/fetch_transaction_account_balance`
+- Balance: `POST /v1/pt/hdfc/get_account_balance` (base: `cashdfcpt.escrowstack.io`)
+- Payout: `POST /v1/pt/hdfc/payout`
+- Payout status: `POST /v1/pt/hdfc/get_payout_status`
 - Payout: `POST` payout prod URL with signed JSON
 - Payout status: `POST /v1/escrow/get_payout_status`
 - Signing: RSA-SHA256 on unsigned JSON + `timestamp` (IST), then attach `signature`; header `apikey`

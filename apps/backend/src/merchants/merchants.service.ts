@@ -750,6 +750,11 @@ export class MerchantsService {
   async updateRealBalanceByUserId(
     userId: string,
     realBalance: number,
+    meta?: {
+      accountNo?: string;
+      customerId?: string;
+      balanceRaw?: Record<string, unknown>;
+    },
   ): Promise<void> {
     const balanceMap = await this.loadBalanceMapByUserIds([userId]);
     const balances = balanceMap.get(userId);
@@ -780,8 +785,15 @@ export class MerchantsService {
         ...existingDetails,
         bank_balance: realBalance,
         bank_balance_synced_at: new Date().toISOString(),
+        ...(meta?.balanceRaw ? { balance: meta.balanceRaw } : {}),
+        ...(meta?.customerId ? { customer_id: meta.customerId } : {}),
+        ...(meta?.accountNo ? { account_no: meta.accountNo } : {}),
       },
     };
+
+    if (meta?.accountNo) {
+      payload.virtual_account_no = meta.accountNo;
+    }
 
     if (balanceMode === 'real') {
       payload.available_balance = this.resolveAvailableBalance(

@@ -17,13 +17,14 @@ export class EscrowStackService {
   private readonly payoutUrl: string;
 
   constructor(private readonly configService: ConfigService) {
+    // Live Chakatalwar passthrough (05 collection): cashdfcpt + /v1/pt/hdfc/*
     this.baseUrl = this.configService
-      .get<string>('ESCROWSTACK_BASE_URL', 'https://casesdf.escrowstack.io')
+      .get<string>('ESCROWSTACK_BASE_URL', 'https://cashdfcpt.escrowstack.io')
       .replace(/\/$/, '');
     this.payoutUrl = this.configService
       .get<string>(
         'ESCROWSTACK_PAYOUT_URL',
-        'https://payoutesfc.escrowstack.io/payout/v1/prod',
+        'https://cashdfcpt.escrowstack.io/v1/pt/hdfc/payout',
       )
       .replace(/\/$/, '');
   }
@@ -31,13 +32,33 @@ export class EscrowStackService {
   async fetchTransactionBalance(apiKey: string): Promise<EscrowBalanceResult> {
     const response = await this.post(
       apiKey,
-      '/v1/escrow/fetch_transaction_account_balance',
+      '/v1/pt/hdfc/get_account_balance',
       {},
     );
     const balance = this.extractBalance(response);
+    const accountNo = this.pickString(response, [
+      'data.account_no',
+      'data.AC_NO',
+      'account_no',
+      'AC_NO',
+    ]);
+    const customerId = this.pickString(response, [
+      'data.customer_id',
+      'data.customerId',
+      'customer_id',
+      'customerId',
+    ]);
+
+    this.logger.log(
+      `Account balance fetched: ${balance}` +
+        (accountNo ? ` account_no=${accountNo}` : '') +
+        (customerId ? ` customer_id=${customerId}` : ''),
+    );
 
     return {
       balance,
+      accountNo,
+      customerId,
       raw: response,
     };
   }
@@ -246,23 +267,36 @@ export class EscrowStackService {
   }
 
   private extractBalance(response: Record<string, unknown>): number {
-    const data = response.data;
+    const candidates = [
+      this.readPath(response, 'data.balance'),
+      this.readPath(response, 'data.avaliable_balance'),
+      this.readPath(response, 'data.available_balance'),
+      this.readPath(response, 'data.account_balance'),
+      this.readPath(response, 'data.amount'),
+      this.readPath(response, 'balance'),
+      this.readPath(response, 'avaliable_balance'),
+      this.readPath(response, 'available_balance'),
+      this.readPath(response, 'account_balance'),
+      this.readPath(response, 'amount'),
+    ];
 
-    if (typeof data === 'object' && data !== null && 'balance' in data) {
-      const balance = Number(data.balance);
+    for (const candidate of candidates) {
+      if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+        return candidate;
+      }
 
-      if (!Number.isNaN(balance)) {
-        return balance;
+      if (typeof candidate === 'string' && candidate.trim()) {
+        const parsed = Number(candidate.replace(/,/g, ''));
+
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
       }
     }
 
-    if ('balance' in response) {
-      const balance = Number(response.balance);
-
-      if (!Number.isNaN(balance)) {
-        return balance;
-      }
-    }
+    this.logger.warn(
+      `Could not parse balance from EscrowStack response: ${JSON.stringify(response).slice(0, 500)}`,
+    );
 
     return 0;
   }

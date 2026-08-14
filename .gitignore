@@ -70,3 +70,7 @@ Desktop.ini
 
 # Secrets & keys
 *.pem
+*.key
+key/
+*.crt
+!apps/**/*.crt

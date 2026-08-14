@@ -135,8 +135,8 @@ JWT_EXPIRES_IN_SECONDS=604800
 ADMIN_JWT_SECRET=different-long-random-secret
 ADMIN_JWT_EXPIRES_IN_SECONDS=604800
 
-ESCROWSTACK_BASE_URL=https://casesdf.escrowstack.io
-ESCROWSTACK_PAYOUT_URL=https://payoutesfc.escrowstack.io/payout/v1/prod
+ESCROWSTACK_BASE_URL=https://cashdfcpt.escrowstack.io
+ESCROWSTACK_PAYOUT_URL=https://cashdfcpt.escrowstack.io/v1/pt/hdfc/payout
 ESCROW_AES_MASTER_KEY=your-aes-master-key
 
 SUPABASE_URL=https://YOUR-PROJECT.supabase.co
@@ -332,44 +332,21 @@ pm2 logs escrow-api --lines 30
 
 ## EscrowStack webhooks
 
-**URL to give EscrowStack:**
+**URL:** `POST https://api.ctpay.tech/webhooks/escrowstack`
 
-```text
-POST https://api.ctpay.tech/webhooks/escrowstack
-```
+**Where to look:** Supabase → Table Editor → **`callbacks`**
 
-### Phase 1 (current — testing)
+| Column | Meaning |
+|--------|---------|
+| `received_at` | When it arrived |
+| `from_ip` | Who sent it |
+| `body` | Full JSON from bank |
 
-| What | Detail |
-|------|--------|
-| Auth / signature | **None for now** — open POST endpoint so EscrowStack can send test callbacks |
-| Every request saved? | **Yes** — full JSON + IP + user-agent + headers in Supabase `webhook_events` |
-| Business logic | Payout/deposit handling runs if payload is recognizable; errors still return **200** so bank retries don't flood |
-| Future | Add RSA signature verification once EscrowStack shares their public key |
+Every POST = **one new row**. If this table is empty, no callback arrived.
 
-**Before first webhook:** run **`012_webhook_events.sql`** in Supabase SQL Editor (and **`013_webhook_request_meta.sql`** if you already ran an older 012).
+Run **`014_simple_callbacks.sql`** in Supabase SQL Editor before testing.
 
-**Quick check in browser or curl:**
-
-```bash
-# Should say "running" / callback is live
-curl https://api.ctpay.tech/webhooks/escrowstack
-
-# Parent list
-curl https://api.ctpay.tech/webhooks
-```
-
-Wrong path (e.g. `/webhooks/escrow`) returns **404** — callback not configured there.
-
-**Test POST:**
-
-```bash
-curl -X POST https://api.ctpay.tech/webhooks/escrowstack \
-  -H "Content-Type: application/json" \
-  -d "{\"code\":\"TEST\",\"message\":\"hello\"}"
-```
-
-Response example: `{"ok":true,"status":"received","message":"Callback received and saved..."}`
+Browser check: `https://api.ctpay.tech/webhooks/escrowstack`
 
 ---
 

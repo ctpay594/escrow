@@ -135,10 +135,21 @@ export class AdminUsersService {
   }
 
   private async fetchEscrowSnapshot(apiKey: string) {
-    const [balanceResult, accountDetails] = await Promise.all([
-      this.escrowStackService.fetchTransactionBalance(apiKey),
-      this.escrowStackService.fetchLoadAccountDetails(apiKey),
-    ]);
+    // Balance is required (new PT path). Load-account is optional — not in
+    // the Chakatalwar passthrough collection; VA/IFSC may be filled later.
+    const balanceResult =
+      await this.escrowStackService.fetchTransactionBalance(apiKey);
+
+    let accountDetails: Awaited<
+      ReturnType<EscrowStackService['fetchLoadAccountDetails']>
+    > = { raw: {} };
+
+    try {
+      accountDetails =
+        await this.escrowStackService.fetchLoadAccountDetails(apiKey);
+    } catch {
+      // Endpoint may 404 on passthrough accounts — continue with balance only.
+    }
 
     const apiKeyLabel =
       this.escrowStackService.decodeMerchantNameFromApiKey(apiKey);
@@ -149,7 +160,9 @@ export class AdminUsersService {
     return {
       merchantName,
       userRef: accountDetails.userRef ?? null,
-      virtualAccountNo: accountDetails.virtualAccountNo ?? null,
+      // PT balance response includes account_no — use it when load-account is missing
+      virtualAccountNo:
+        accountDetails.virtualAccountNo ?? balanceResult.accountNo ?? null,
       escrowIfsc: accountDetails.escrowIfsc ?? null,
       availableBalance: balanceResult.balance,
       apiKeyLabel,
@@ -157,6 +170,8 @@ export class AdminUsersService {
       escrowAccountDetails: {
         balance: balanceResult.raw,
         account: accountDetails.raw,
+        customer_id: balanceResult.customerId ?? null,
+        account_no: balanceResult.accountNo ?? null,
       },
     };
   }
@@ -233,10 +248,17 @@ export class AdminUsersService {
     await this.merchantsService.updateRealBalanceByUserId(
       id,
       balanceResult.balance,
+      {
+        accountNo: balanceResult.accountNo,
+        customerId: balanceResult.customerId,
+        balanceRaw: balanceResult.raw,
+      },
     );
 
     return {
       real_balance: balanceResult.balance,
+      account_no: balanceResult.accountNo ?? null,
+      customer_id: balanceResult.customerId ?? null,
       message: 'Real balance refreshed from EscrowStack',
     };
   }

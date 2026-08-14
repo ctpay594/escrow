@@ -10,14 +10,9 @@ export class WebhooksController {
   listEndpoints() {
     return {
       ok: true,
-      message: 'CTPay webhook service is running.',
-      endpoints: {
-        escrowstack: {
-          status: 'running',
-          check: 'GET /webhooks/escrowstack',
-          callback: 'POST /webhooks/escrowstack',
-        },
-      },
+      message: 'Webhook is running. Bank should POST JSON here.',
+      callback: 'POST /webhooks/escrowstack',
+      supabase_table: 'callbacks',
     };
   }
 
@@ -26,25 +21,18 @@ export class WebhooksController {
     return {
       ok: true,
       status: 'running',
-      service: 'escrowstack',
       message:
-        'EscrowStack callback endpoint is live. Send bank webhooks via POST with JSON body.',
+        'Callback URL is live. Bank POSTs JSON. We save it in Supabase table: callbacks',
       method: 'POST',
       url: '/webhooks/escrowstack',
-      checked_at: new Date().toISOString(),
     };
   }
 
   @Post('escrowstack')
   @HttpCode(200)
-  handleEscrowStack(
-    @Body() payload: Record<string, unknown>,
-    @Req() req: Request,
-  ) {
+  handleEscrowStack(@Body() payload: unknown, @Req() req: Request) {
     return this.webhooksService.handleEscrowStackWebhook(payload, {
       remoteIp: this.resolveClientIp(req),
-      userAgent: req.get('user-agent') ?? null,
-      requestHeaders: this.sanitizeHeaders(req.headers),
     });
   }
 
@@ -60,31 +48,5 @@ export class WebhooksController {
     }
 
     return req.ip ?? req.socket.remoteAddress ?? null;
-  }
-
-  private sanitizeHeaders(
-    headers: Request['headers'],
-  ): Record<string, string | string[]> {
-    const safe: Record<string, string | string[]> = {};
-
-    for (const [key, value] of Object.entries(headers)) {
-      if (value === undefined) {
-        continue;
-      }
-
-      const normalized = key.toLowerCase();
-
-      if (
-        normalized === 'authorization' ||
-        normalized === 'cookie' ||
-        normalized === 'set-cookie'
-      ) {
-        continue;
-      }
-
-      safe[normalized] = value;
-    }
-
-    return safe;
   }
 }

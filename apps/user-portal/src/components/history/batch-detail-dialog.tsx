@@ -33,13 +33,14 @@ export function BatchDetailDialog({ entry, onClose }: BatchDetailDialogProps) {
     return null;
   }
 
-  const title = batchDisplayTitle(entry);
-  const status = aggregateBatchStatus(entry.transfers);
+  const batch = entry;
+  const title = batchDisplayTitle(batch);
+  const status = aggregateBatchStatus(batch.transfers);
 
   function downloadBatchSheet() {
-    exportBatchStatementXlsx(entry.transfers, {
-      label: entry.label,
-      batchId: entry.batchId,
+    exportBatchStatementXlsx(batch.transfers, {
+      label: batch.label,
+      batchId: batch.batchId,
     });
     toast.success('Batch statement downloaded');
   }
@@ -50,8 +51,8 @@ export function BatchDetailDialog({ entry, onClose }: BatchDetailDialogProps) {
         <DialogHeader className="border-b border-white/50 px-6 py-4">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {entry.transfers.length} payout{entry.transfers.length === 1 ? '' : 's'} ·{' '}
-            {formatCurrency(entry.totalAmount)} · {formatDate(entry.created_at)}
+            {batch.transfers.length} payout{batch.transfers.length === 1 ? '' : 's'} ·{' '}
+            {formatCurrency(batch.totalAmount)} · {formatDate(batch.created_at)}
           </DialogDescription>
         </DialogHeader>
 
@@ -77,7 +78,7 @@ export function BatchDetailDialog({ entry, onClose }: BatchDetailDialogProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/50">
-              {entry.transfers.map((transfer) => (
+              {batch.transfers.map((transfer) => (
                 <tr key={transfer.id} className={glassTableRow('default')}>
                   <td className="px-3 py-2 font-medium">
                     {transfer.beneficiary_account_name}

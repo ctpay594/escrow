@@ -704,7 +704,9 @@ export class TransfersService {
   ): Promise<PublicTransfer | null> {
     const mappedStatus = this.mapEscrowStatus(entry.status, entry.raw);
     const bankRef = entry.bank_ref?.trim() || null;
-    const utr = entry.utr?.trim() || null;
+    const utr =
+      entry.utr?.trim() ||
+      (mappedStatus === 'SUCCESS' ? bankRef : null);
 
     if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {
       return null;
@@ -830,10 +832,13 @@ export class TransfersService {
     if (
       odStatus === 'po_bp_dcp' ||
       odStatus === 'txsett' ||
+      odStatus === 'txcomp' ||
+      odStatus === 'txncomp' ||
       txnStatus === 'completed' ||
       txnStatus === 'complete' ||
       txnStatus === 'success' ||
       txnStatus === 'txsett' ||
+      txnStatus === 'txcomp' ||
       txnStatus === 'settled'
     ) {
       return 'SUCCESS';

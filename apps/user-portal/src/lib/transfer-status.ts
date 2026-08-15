@@ -20,7 +20,7 @@ export function userTransferStatus(status: string): string {
     case 'CREDITED':
       return 'Credited';
     case 'FAILED':
-      return 'Failed · credited back';
+      return 'Failed';
     case 'REJECTED':
       return 'Cancelled';
     default:

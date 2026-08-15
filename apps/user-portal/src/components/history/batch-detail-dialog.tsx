@@ -99,7 +99,14 @@ export function BatchDetailDialog({ entry, onClose }: BatchDetailDialogProps) {
                     {transferUtr(transfer) ?? '—'}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <TransferStatusBadge status={transfer.status} />
+                    <div className="inline-flex flex-col items-end gap-0.5">
+                      <TransferStatusBadge status={transfer.status} />
+                      {transfer.status === 'FAILED' ? (
+                        <span className="text-[10px] font-normal text-muted-foreground">
+                          Credited back
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}

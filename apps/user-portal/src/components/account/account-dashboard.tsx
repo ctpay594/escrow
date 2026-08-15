@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { History, RefreshCw, Send } from 'lucide-react';
+import { History, Layers, RefreshCw, Send } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
@@ -19,7 +19,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { formatCurrency, formatTableDate } from '@/lib/format';
 import { glassInset } from '@/lib/glass-styles';
 import type { DepositItem, MerchantProfile, SessionUser, TransferItem } from '@/lib/types';
-import { depositToHistoryRow, isDepositRow } from '@/lib/deposit-display';
+import { depositToHistoryRow } from '@/lib/deposit-display';
+import {
+  aggregateBatchStatus,
+  batchDisplayTitle,
+  buildHistoryEntries,
+  parseUserTransfersResponse,
+  type TransferBatchMeta,
+} from '@/lib/history-display';
 import { cn } from '@/lib/utils';
 import { TransferStatusBadge } from '@/components/shared/transfer-status-badge';
 
@@ -53,6 +60,9 @@ export function AccountDashboard({
 }: AccountDashboardProps) {
   const [merchant, setMerchant] = useState(initialMerchant);
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
+  const [batchMeta, setBatchMeta] = useState<Map<string, TransferBatchMeta>>(
+    () => new Map(),
+  );
   const [loading, setLoading] = useState(true);
   const [refreshingBalance, setRefreshingBalance] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,9 +84,12 @@ export function AccountDashboard({
       if (!transfersResponse.ok) {
         throw new Error(transfersData.message ?? 'Failed to load activity');
       }
-      const payouts = (Array.isArray(transfersData) ? transfersData : []).map(
-        (row: TransferItem) => ({ ...row, kind: row.kind ?? 'payout' }),
-      );
+      const parsed = parseUserTransfersResponse(transfersData);
+      setBatchMeta(parsed.batches);
+      const payouts = parsed.transfers.map((row: TransferItem) => ({
+        ...row,
+        kind: row.kind ?? 'payout',
+      }));
       const deposits = (
         depositsResponse.ok && Array.isArray(depositsData)
           ? (depositsData as DepositItem[])
@@ -177,6 +190,11 @@ export function AccountDashboard({
       completedThisWeek,
     };
   }, [transfers]);
+
+  const recentActivity = useMemo(
+    () => buildHistoryEntries(transfers, batchMeta).slice(0, 5),
+    [transfers, batchMeta],
+  );
 
   if (loading) {
     return <DashboardSkeleton />;
@@ -299,49 +317,72 @@ export function AccountDashboard({
           <div className="border-t border-white/50 pt-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <p className="text-sm font-medium text-foreground">Recent activity</p>
-              {transfers.length > 0 ? (
+              {recentActivity.length > 0 ? (
                 <Button asChild variant="ghost" size="sm" className="h-8 px-2 text-xs">
                   <Link href="/history">View all</Link>
                 </Button>
               ) : null}
             </div>
-            {transfers.length === 0 ? (
+              {recentActivity.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Deposits and payouts will show up here.
               </p>
             ) : (
               <ul className="divide-y divide-white/50">
-                {transfers.slice(0, 5).map((row) => (
-                  <li key={row.id}>
-                    <Link
-                      href="/history"
-                      className="flex items-center justify-between gap-3 py-2.5 text-sm transition-colors hover:text-foreground"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">
-                          {isDepositRow(row)
-                            ? `Deposit · ${row.beneficiary_account_name}`
-                            : row.beneficiary_account_name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {formatTableDate(row.created_at)}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 flex-col items-end gap-1">
-                        <span
-                          className={cn(
-                            'tabular-nums font-medium',
-                            isDepositRow(row) && 'text-emerald-700',
-                          )}
-                        >
-                          {isDepositRow(row) ? '+' : '−'}
-                          {formatCurrency(row.amount)}
-                        </span>
-                        <TransferStatusBadge status={row.status} />
-                      </div>
-                    </Link>
-                  </li>
-                ))}
+                {recentActivity.map((entry) => {
+                  const isBatch = entry.kind === 'batch';
+                  const isDeposit = entry.kind === 'deposit';
+                  const transfer = entry.kind === 'batch' ? null : entry.item;
+                  const createdAt =
+                    entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
+                  const amount =
+                    entry.kind === 'batch'
+                      ? entry.totalAmount
+                      : entry.item.amount;
+                  const status =
+                    entry.kind === 'batch'
+                      ? aggregateBatchStatus(entry.transfers)
+                      : entry.item.status;
+
+                  return (
+                    <li key={isBatch ? entry.batchId : entry.item.id}>
+                      <Link
+                        href="/history"
+                        className="flex items-center justify-between gap-3 py-2.5 text-sm transition-colors hover:text-foreground"
+                      >
+                        <div className="min-w-0">
+                          <p className="flex items-center gap-2 truncate font-medium">
+                            {isBatch ? (
+                              <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            ) : null}
+                            <span className="truncate">
+                              {isBatch
+                                ? batchDisplayTitle(entry)
+                                : isDeposit
+                                  ? `Deposit · ${transfer?.beneficiary_account_name}`
+                                  : transfer?.beneficiary_account_name}
+                            </span>
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatTableDate(createdAt)}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <span
+                            className={cn(
+                              'tabular-nums font-medium',
+                              isDeposit && 'text-emerald-700',
+                            )}
+                          >
+                            {isDeposit ? '+' : '−'}
+                            {formatCurrency(amount)}
+                          </span>
+                          <TransferStatusBadge status={status} />
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>

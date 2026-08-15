@@ -179,6 +179,10 @@ export class AdminUsersService {
     return this.merchantsService.listDepositsForUser(userId);
   }
 
+  listAllDeposits() {
+    return this.merchantsService.listDepositsForAdmin();
+  }
+
   async refreshRealBalance(_id: string) {
     return this.fetchCompanyBankBalance();
   }

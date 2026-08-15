@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Bell, ChevronDown, LogOut, Menu, Users, X } from 'lucide-react';
+import { Bell, ChevronDown, History, LogOut, Menu, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { AdminLogo } from '@/components/admin-logo';
 import { UserPortalLiveLink } from '@/components/user-portal-live-link';
@@ -52,7 +52,10 @@ export function AdminHeader({ adminUsername, activePath }: AdminHeaderProps) {
     router.refresh();
   }
 
-  const navItems = [{ href: '/', label: 'Merchants', icon: Users }];
+  const navItems = [
+    { href: '/', label: 'Merchants', icon: Users },
+    { href: '/history', label: 'History', icon: History },
+  ];
 
   return (
     <header className={cn('sticky top-0 z-40', glassHeaderBar())}>

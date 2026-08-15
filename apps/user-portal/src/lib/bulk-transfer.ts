@@ -1,14 +1,19 @@
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { isIfscValid } from '@/lib/transfer-validation';
+import { parsePayoutMode, type BankPayoutMode } from '@/lib/payout-mode';
 
 export interface BulkTransferRow {
   rowNumber: number;
   beneficiary_account_name: string;
   beneficiary_account_no: string;
   beneficiary_ifsc: string;
+  payout_mode: BankPayoutMode;
   amount: number;
   accountWarning?: boolean;
+  ifscWarning?: boolean;
+  modeWarning?: boolean;
+  warningMessage?: string;
 }
 
 export interface ParsedBulkSheet {
@@ -16,16 +21,20 @@ export interface ParsedBulkSheet {
   errors: { rowNumber: number; message: string }[];
 }
 
-const SAMPLE_HEADERS = [
+export const BULK_UPLOAD_HEADERS = [
   'beneficiary_name',
   'account_number',
   'ifsc',
+  'payout_mode',
   'amount_inr',
 ] as const;
 
+const SAMPLE_HEADERS = BULK_UPLOAD_HEADERS;
+
 const SAMPLE_DATA = [
-  ['Rahul Sharma', '123456789012', 'HDFC0001234', 1000],
-  ['Priya Patel', '987654321098', 'ICIC0000456', 2500.5],
+  ['Rahul Sharma', '123456789012', 'HDFC0001234', 'IMPS', 1000],
+  ['Priya Patel', '987654321098', 'ICIC0000456', 'NEFT', 2500.5],
+  ['Amit Verma', '112233445566', 'SBIN0001234', 'RTGS', 210000],
 ];
 
 const ACCOUNT_HEADER_KEYS = [
@@ -369,9 +378,8 @@ function buildBulkRowsFromNormalized(
     ).trim();
 
     const rawAccount = pickValue(normalized, ACCOUNT_HEADER_KEYS);
-    const { digits: accountNo, precisionWarning } = parseRawAccountDigits(
-      String(rawAccount),
-    );
+    const { digits: accountNo, precisionWarning: rawPrecisionWarning } =
+      parseRawAccountDigits(String(rawAccount));
 
     const ifsc = String(pickValue(normalized, ['ifsc', 'beneficiary_ifsc']))
       .trim()
@@ -384,27 +392,57 @@ function buildBulkRowsFromNormalized(
       return;
     }
 
-    if (!beneficiaryName || beneficiaryName.length < 2) {
-      errors.push({ rowNumber, message: 'Beneficiary name is required' });
-      return;
-    }
+    const payoutModeRaw = String(
+      pickValue(normalized, ['payout_mode', 'mode', 'transfer_mode', 'payout']),
+    );
+    const payoutMode = parsePayoutMode(payoutModeRaw) ?? 'IMPS';
+    const modeWarning = Boolean(payoutModeRaw.trim()) && !parsePayoutMode(payoutModeRaw);
 
-    if (!/^\d{9,18}$/.test(accountNo)) {
+    const accountValid = /^\d{9,18}$/.test(accountNo);
+    const ifscValid = isIfscValid(ifsc);
+    const amountValid = Number.isFinite(amount) && amount > 0;
+    const precisionWarning = rawPrecisionWarning && accountValid;
+    const warnings: string[] = [];
+
+    if (!beneficiaryName || beneficiaryName.length < 2) {
       errors.push({
         rowNumber,
-        message:
-          'Invalid account number — use 9–18 digits. Format the account column as Text in Excel, or paste data using the Paste tab.',
+        message: 'Correct this: beneficiary name is missing or too short.',
       });
       return;
     }
 
-    if (!isIfscValid(ifsc)) {
-      errors.push({ rowNumber, message: 'Invalid IFSC code' });
-      return;
+    if (!accountValid) {
+      warnings.push(
+        `Account number ${accountNo || '(blank)'} is wrong. Use 9–18 digits.`,
+      );
+    } else if (precisionWarning) {
+      warnings.push(
+        `Account number ${accountNo} looks truncated. Correct it to the full digits.`,
+      );
     }
 
-    if (!Number.isFinite(amount) || amount <= 0) {
-      errors.push({ rowNumber, message: 'Invalid amount' });
+    if (!ifscValid) {
+      warnings.push(
+        `IFSC ${ifsc || '(blank)'} is wrong. Use a valid code like HDFC0001234.`,
+      );
+    }
+
+    if (modeWarning) {
+      warnings.push(
+        `Payout mode ${payoutModeRaw.trim()} is wrong. Use IMPS, NEFT, or RTGS.`,
+      );
+    }
+
+    if (payoutMode === 'RTGS' && amountValid && amount < 200_000) {
+      warnings.push('RTGS requires a minimum of ₹2,00,000. Correct the amount or mode.');
+    }
+
+    if (!amountValid) {
+      errors.push({
+        rowNumber,
+        message: 'Correct this: amount is missing or invalid.',
+      });
       return;
     }
 
@@ -413,8 +451,12 @@ function buildBulkRowsFromNormalized(
       beneficiary_account_name: beneficiaryName,
       beneficiary_account_no: accountNo,
       beneficiary_ifsc: ifsc,
+      payout_mode: payoutMode,
       amount: Number(amount.toFixed(2)),
-      accountWarning: precisionWarning,
+      accountWarning: !accountValid || precisionWarning,
+      ifscWarning: !ifscValid,
+      modeWarning,
+      warningMessage: warnings.join(' '),
     });
   });
 
@@ -446,7 +488,13 @@ export function downloadBulkTransferSample() {
     worksheet[cellRef] = { t: 's', v: accountValue };
   }
 
-  worksheet['!cols'] = [{ wch: 24 }, { wch: 20 }, { wch: 14 }, { wch: 12 }];
+  worksheet['!cols'] = [
+    { wch: 24 },
+    { wch: 20 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 12 },
+  ];
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Bulk transfers');
@@ -497,5 +545,11 @@ export function bulkRowsTotal(rows: BulkTransferRow[]) {
 }
 
 export function bulkRowsHaveAccountWarnings(rows: BulkTransferRow[]) {
-  return rows.some((row) => row.accountWarning);
+  return rows.some(
+    (row) => row.accountWarning || row.ifscWarning || row.modeWarning,
+  );
+}
+
+export function bulkRowNeedsCorrection(row: BulkTransferRow) {
+  return Boolean(row.accountWarning || row.ifscWarning || row.modeWarning);
 }

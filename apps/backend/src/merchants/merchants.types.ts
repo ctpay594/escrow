@@ -65,6 +65,11 @@ export interface PublicDeposit {
   created_at: string;
 }
 
+export interface AdminDepositListItem extends PublicDeposit {
+  user_id: string | null;
+  merchant_id: string | null;
+}
+
 export interface CreateMerchantInput {
   userId: string;
   merchantName: string;

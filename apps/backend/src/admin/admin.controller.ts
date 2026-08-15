@@ -119,6 +119,11 @@ export class AdminUsersController {
     return this.adminUsersService.refreshRealBalance(id);
   }
 
+  @Get('deposits')
+  listAllDeposits() {
+    return this.adminUsersService.listAllDeposits();
+  }
+
   @Get(':id/deposits')
   listDeposits(@Param('id') id: string) {
     return this.adminUsersService.listDeposits(id);

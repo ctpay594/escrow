@@ -22,8 +22,11 @@ import {
 import { Input } from '@/components/ui/input';
 import { formatCurrency } from '@/lib/format';
 import { glassInset } from '@/lib/glass-styles';
+import { PAYOUT_MODES, type BankPayoutMode } from '@/lib/payout-mode';
+import { isIfscValid } from '@/lib/transfer-validation';
 import { cn } from '@/lib/utils';
 import {
+  bulkRowNeedsCorrection,
   bulkRowsHaveAccountWarnings,
   bulkRowsTotal,
   downloadBulkTransferSample,
@@ -81,9 +84,10 @@ export function BulkTransferPanel({
         toast.message(`${parsed.rows.length} valid · ${parsed.errors.length} skipped`);
       }
 
-      if (bulkRowsHaveAccountWarnings(parsed.rows)) {
+      const warningCount = parsed.rows.filter(bulkRowNeedsCorrection).length;
+      if (warningCount > 0) {
         toast.warning(
-          'Some account numbers may be wrong — check highlighted rows and fix before submitting.',
+          `${warningCount} row${warningCount === 1 ? '' : 's'} have a wrong account, IFSC, or payout mode. Correct them before submitting.`,
         );
       }
 
@@ -101,21 +105,87 @@ export function BulkTransferPanel({
     setRows((current) =>
       current.map((row, rowIndex) =>
         rowIndex === index
-          ? {
+          ? withRowWarnings({
               ...row,
               beneficiary_account_no: digits,
-              accountWarning: looksLikeRoundedAccount(digits),
-            }
+            })
           : row,
       ),
     );
+  }
+
+  function updateRowIfsc(index: number, ifsc: string) {
+    const nextIfsc = ifsc.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    setRows((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index
+          ? withRowWarnings({
+              ...row,
+              beneficiary_ifsc: nextIfsc,
+            })
+          : row,
+      ),
+    );
+  }
+
+  function updateRowMode(index: number, payoutMode: BankPayoutMode) {
+    setRows((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index
+          ? withRowWarnings({
+              ...row,
+              payout_mode: payoutMode,
+              modeWarning: false,
+            })
+          : row,
+      ),
+    );
+  }
+
+  function withRowWarnings(row: BulkTransferRow): BulkTransferRow {
+    const accountValid = /^\d{9,18}$/.test(row.beneficiary_account_no);
+    const ifscValid = isIfscValid(row.beneficiary_ifsc);
+    const precisionWarning =
+      accountValid && looksLikeRoundedAccount(row.beneficiary_account_no);
+    const warnings: string[] = [];
+
+    if (!accountValid) {
+      warnings.push(
+        `Account number ${row.beneficiary_account_no || '(blank)'} is wrong. Use 9–18 digits.`,
+      );
+    } else if (precisionWarning) {
+      warnings.push(
+        `Account number ${row.beneficiary_account_no} looks truncated. Correct it to the full digits.`,
+      );
+    }
+
+    if (!ifscValid) {
+      warnings.push(
+        `IFSC ${row.beneficiary_ifsc || '(blank)'} is wrong. Use a valid code like HDFC0001234.`,
+      );
+    }
+
+    if (row.modeWarning) {
+      warnings.push('Payout mode is wrong. Use IMPS, NEFT, or RTGS.');
+    }
+
+    if (row.payout_mode === 'RTGS' && row.amount < 200_000) {
+      warnings.push('RTGS requires a minimum of ₹2,00,000. Correct the amount or mode.');
+    }
+
+    return {
+      ...row,
+      accountWarning: !accountValid || precisionWarning,
+      ifscWarning: !ifscValid,
+      warningMessage: warnings.join(' '),
+    };
   }
 
   async function submitBulkTransfer() {
     if (rows.length === 0 || disabled) return;
 
     if (hasAccountWarnings) {
-      toast.error('Fix highlighted account numbers before submitting');
+      toast.error('Correct highlighted account numbers, IFSC, or payout mode before submitting');
       return;
     }
 
@@ -126,7 +196,17 @@ export function BulkTransferPanel({
 
     for (const row of rows) {
       if (!/^\d{9,18}$/.test(row.beneficiary_account_no)) {
-        toast.error(`Row ${row.rowNumber}: invalid account number`);
+        toast.error(`Row ${row.rowNumber}: this account number is wrong. Correct it.`);
+        return;
+      }
+
+      if (!isIfscValid(row.beneficiary_ifsc)) {
+        toast.error(`Row ${row.rowNumber}: this IFSC is wrong. Correct it.`);
+        return;
+      }
+
+      if (row.payout_mode === 'RTGS' && row.amount < 200_000) {
+        toast.error(`Row ${row.rowNumber}: RTGS requires a minimum of ₹2,00,000.`);
         return;
       }
     }
@@ -141,7 +221,7 @@ export function BulkTransferPanel({
           label: fileName ?? undefined,
           transfers: rows.map((row) => ({
             amount: row.amount,
-            payout_mode: 'IMPS',
+            payout_mode: row.payout_mode,
             beneficiary_account_name: row.beneficiary_account_name,
             beneficiary_account_no: row.beneficiary_account_no,
             beneficiary_ifsc: row.beneficiary_ifsc,
@@ -181,8 +261,8 @@ export function BulkTransferPanel({
         <GlassCardHeader className="pb-3">
           <GlassCardTitle className="text-base">Bulk transfer</GlassCardTitle>
           <GlassCardDescription>
-            Upload Excel or CSV (name, account, IFSC, amount). Transfers are
-            processed after you submit.
+            Upload Excel or CSV (name, account, IFSC, payout mode, amount).
+            Transfers are processed after you submit.
           </GlassCardDescription>
         </GlassCardHeader>
         <GlassCardContent className="space-y-4">
@@ -268,7 +348,8 @@ export function BulkTransferPanel({
               </p>
               {hasAccountWarnings ? (
                 <p className="mt-1 text-xs text-amber-700">
-                  Some account numbers need review before submit.
+                  Some account numbers, IFSC codes, or payout modes need review
+                  before submit.
                 </p>
               ) : null}
               <Button
@@ -317,8 +398,8 @@ export function BulkTransferPanel({
             <div className="mx-6 mt-4 flex gap-2 rounded-xl border border-amber-200/80 bg-amber-50/75 px-3 py-2 text-xs text-amber-900 backdrop-blur-sm">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <p>
-                Highlighted account numbers look truncated. Edit each account to
-                the full digits before submitting.
+                Highlighted rows have a wrong account number or IFSC. Correct
+                them here before submitting.
               </p>
             </div>
           ) : null}
@@ -331,14 +412,18 @@ export function BulkTransferPanel({
                   <th className="pb-2 pr-3 font-medium">Beneficiary</th>
                   <th className="pb-2 pr-3 font-medium">Account</th>
                   <th className="pb-2 pr-3 font-medium">IFSC</th>
+                  <th className="pb-2 pr-3 font-medium">Mode</th>
                   <th className="pb-2 text-right font-medium">Amount</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {rows.map((row, index) => (
+                {rows.map((row, index) => {
+                  const needsCorrection = bulkRowNeedsCorrection(row);
+
+                  return (
                   <tr
                     key={`${row.rowNumber}-${index}`}
-                    className={row.accountWarning ? 'bg-amber-50/80' : undefined}
+                    className={needsCorrection ? 'bg-amber-50/80' : undefined}
                   >
                     <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
                     <td className="py-2 pr-3">{row.beneficiary_account_name}</td>
@@ -357,14 +442,54 @@ export function BulkTransferPanel({
                         aria-invalid={row.accountWarning}
                       />
                     </td>
-                    <td className="py-2 pr-3 font-mono text-xs">
-                      {row.beneficiary_ifsc}
+                    <td className="py-2 pr-3">
+                      <Input
+                        value={row.beneficiary_ifsc}
+                        onChange={(event) =>
+                          updateRowIfsc(index, event.target.value)
+                        }
+                        className={`h-8 font-mono text-xs uppercase tracking-wide ${
+                          row.ifscWarning
+                            ? 'border-amber-400 bg-amber-50 focus-visible:ring-amber-400'
+                            : ''
+                        }`}
+                        aria-invalid={row.ifscWarning}
+                      />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <select
+                        value={row.payout_mode}
+                        onChange={(event) =>
+                          updateRowMode(
+                            index,
+                            event.target.value as BankPayoutMode,
+                          )
+                        }
+                        className={`h-8 rounded-md border bg-background px-2 text-xs ${
+                          row.modeWarning
+                            ? 'border-amber-400 bg-amber-50'
+                            : 'border-input'
+                        }`}
+                        aria-label={`Payout mode for row ${row.rowNumber}`}
+                      >
+                        {PAYOUT_MODES.map((mode) => (
+                          <option key={mode} value={mode}>
+                            {mode}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className="py-2 text-right tabular-nums">
                       {formatCurrency(row.amount)}
+                      {row.warningMessage ? (
+                        <p className="mt-1 text-left text-[11px] font-normal text-amber-800">
+                          {row.warningMessage}
+                        </p>
+                      ) : null}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

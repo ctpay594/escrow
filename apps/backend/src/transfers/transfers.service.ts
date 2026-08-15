@@ -20,6 +20,7 @@ import type {
   ReconcileTransfersResult,
   TransferRecord,
   TransferStatus,
+  UserTransfersListResult,
 } from './transfers.types';
 
 const PUBLIC_TRANSFER_FIELDS =
@@ -298,17 +299,40 @@ export class TransfersService {
     };
   }
 
-  async listTransfersForUser(userId: string): Promise<PublicTransfer[]> {
-    const rows = await this.fetchTransferRows((select) =>
+  async listTransfersForUser(userId: string): Promise<UserTransfersListResult> {
+    const [rows, batchesResult] = await Promise.all([
+      this.fetchTransferRows((select) =>
+        this.supabaseService
+          .getAdminClient()
+          .from('transfers')
+          .select(select)
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false }),
+      ),
       this.supabaseService
         .getAdminClient()
-        .from('transfers')
-        .select(select)
+        .from('transfer_batches')
+        .select('id, label, total_amount, transfer_count, created_at')
         .eq('user_id', userId)
         .order('created_at', { ascending: false }),
-    );
+    ]);
 
-    return rows.map((row) => this.toPublicTransfer(row as TransferRecord));
+    if (batchesResult.error) {
+      throw new InternalServerErrorException('Failed to load transfer batches');
+    }
+
+    return {
+      transfers: rows.map((row) =>
+        this.toPublicTransfer(row as TransferRecord),
+      ),
+      batches: (batchesResult.data ?? []).map((batch) => ({
+        id: batch.id as string,
+        label: (batch.label as string | null) ?? null,
+        total_amount: Number(batch.total_amount),
+        transfer_count: Number(batch.transfer_count),
+        created_at: batch.created_at as string,
+      })),
+    };
   }
 
   listDepositsForUser(userId: string) {

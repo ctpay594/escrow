@@ -6,11 +6,14 @@ import {
   ChevronRight,
   ClipboardCheck,
   Download,
+  FileSpreadsheet,
   FileText,
+  Layers,
   Search,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { toast } from 'sonner';
+import { BatchDetailDialog } from '@/components/history/batch-detail-dialog';
 import {
   EmptyStateIllustrated,
   ErrorCard,
@@ -39,8 +42,23 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { depositToHistoryRow, isDepositRow } from '@/lib/deposit-display';
-import { exportTransfersCsv, buildTransferReceiptText } from '@/lib/export-transfers';
+import { exportBatchStatementXlsx } from '@/lib/export-batch';
+import {
+  exportHistoryEntriesCsv,
+  buildTransferReceiptText,
+} from '@/lib/export-transfers';
 import { formatCurrency, formatDate, formatTableDate } from '@/lib/format';
+import {
+  aggregateBatchStatus,
+  batchDisplayTitle,
+  buildHistoryEntries,
+  entryMatchesPeriod,
+  entryMatchesSearch,
+  entryMatchesStatus,
+  parseUserTransfersResponse,
+  type TransferBatchMeta,
+  type HistoryEntry,
+} from '@/lib/history-display';
 import { glassInset, glassSurface, glassTableHead, glassTableRow } from '@/lib/glass-styles';
 import { transferUtr } from '@/lib/transfer-display';
 import type { DepositItem, TransferItem } from '@/lib/types';
@@ -56,15 +74,20 @@ const PERIOD_LABEL: Record<HistoryPeriod, string> = {
   all: 'All time',
 };
 
-function isWithinPeriod(value: string, period: HistoryPeriod) {
-  if (period === 'all') return true;
-  const windowMs =
-    period === '48h' ? 48 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  return Date.now() - new Date(value).getTime() <= windowMs;
-}
-
 interface HistoryPanelProps {
   accountLabel: string;
+}
+
+function entryStatus(entry: HistoryEntry) {
+  if (entry.kind === 'batch') {
+    return aggregateBatchStatus(entry.transfers);
+  }
+
+  return entry.item.status;
+}
+
+function isEntryProcessing(entry: HistoryEntry) {
+  return isProcessingStatus(entryStatus(entry));
 }
 
 function isProcessingStatus(status: string) {
@@ -96,6 +119,9 @@ function HistoryTableSkeleton() {
 
 export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
+  const [batchMeta, setBatchMeta] = useState<Map<string, TransferBatchMeta>>(
+    () => new Map(),
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +130,10 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   const [period, setPeriod] = useState<HistoryPeriod>('7d');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<TransferItem | null>(null);
+  const [selectedBatch, setSelectedBatch] = useState<Extract<
+    HistoryEntry,
+    { kind: 'batch' }
+  > | null>(null);
   const autoCheckedRef = useRef(false);
 
   const loadTransfers = useCallback(async () => {
@@ -125,9 +155,12 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
         throw new Error(transfersData.message ?? 'Failed to load history');
       }
 
-      const payouts = (Array.isArray(transfersData) ? transfersData : []).map(
-        (row: TransferItem) => ({ ...row, kind: row.kind ?? 'payout' }),
-      );
+      const parsed = parseUserTransfersResponse(transfersData);
+      setBatchMeta(parsed.batches);
+      const payouts = parsed.transfers.map((row: TransferItem) => ({
+        ...row,
+        kind: row.kind ?? 'payout',
+      }));
       const deposits = (
         depositsResponse.ok && Array.isArray(depositsData)
           ? (depositsData as DepositItem[])
@@ -226,48 +259,26 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
     void checkStatus({ silent: true });
   }, [checkStatus, hasBankProcessing, isLoading]);
 
+  const historyEntries = useMemo(
+    () => buildHistoryEntries(transfers, batchMeta),
+    [transfers, batchMeta],
+  );
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return transfers.filter((transfer) => {
-      if (!isWithinPeriod(transfer.created_at, period)) {
+    return historyEntries.filter((entry) => {
+      if (!entryMatchesPeriod(entry, period)) {
         return false;
       }
 
-      if (statusFilter === 'processing' && !isProcessingStatus(transfer.status)) {
+      if (!entryMatchesStatus(entry, statusFilter)) {
         return false;
       }
 
-      if (statusFilter === 'CREDITED' && !isDepositRow(transfer)) {
-        return false;
-      }
-
-      if (statusFilter === 'SUCCESS' && isDepositRow(transfer)) {
-        return false;
-      }
-
-      if (
-        statusFilter !== 'all' &&
-        statusFilter !== 'processing' &&
-        statusFilter !== 'CREDITED' &&
-        transfer.status !== statusFilter
-      ) {
-        return false;
-      }
-
-      if (!query) return true;
-
-      const utr = transferUtr(transfer) ?? '';
-      return (
-        transfer.beneficiary_account_name.toLowerCase().includes(query) ||
-        transfer.payout_ref.toLowerCase().includes(query) ||
-        utr.toLowerCase().includes(query) ||
-        (transfer.beneficiary_account_no ?? '').toLowerCase().includes(query) ||
-        (transfer.beneficiary_ifsc ?? '').toLowerCase().includes(query) ||
-        (transfer.virtual_account ?? '').toLowerCase().includes(query)
-      );
+      return entryMatchesSearch(entry, query);
     });
-  }, [transfers, search, statusFilter, period]);
+  }, [historyEntries, search, statusFilter, period]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice(
@@ -278,6 +289,35 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   useEffect(() => {
     setPage(1);
   }, [search, statusFilter, period]);
+
+  function downloadBatchSheet(
+    entry: Extract<HistoryEntry, { kind: 'batch' }>,
+    event?: MouseEvent,
+  ) {
+    event?.stopPropagation();
+    exportBatchStatementXlsx(entry.transfers, {
+      label: entry.label,
+      batchId: entry.batchId,
+    });
+    toast.success('Batch statement downloaded');
+  }
+
+  function openEntry(entry: HistoryEntry) {
+    if (entry.kind === 'batch') {
+      setSelectedBatch(entry);
+      return;
+    }
+
+    setSelected(entry.item);
+  }
+
+  function entryKey(entry: HistoryEntry) {
+    if (entry.kind === 'batch') {
+      return `batch-${entry.batchId}`;
+    }
+
+    return entry.item.id;
+  }
 
   function downloadReceipt(transfer: TransferItem) {
     if (isDepositRow(transfer)) {
@@ -316,7 +356,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
             <DropdownMenuContent align="end">
               <DropdownMenuItem
                 onClick={() => {
-                  exportTransfersCsv(
+                  exportHistoryEntriesCsv(
                     filtered,
                     accountLabel,
                     PERIOD_LABEL[period],
@@ -328,7 +368,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  exportTransfersCsv(
+                  exportHistoryEntriesCsv(
                     filtered,
                     accountLabel,
                     PERIOD_LABEL[period],
@@ -434,48 +474,113 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
             <>
               <div className="space-y-3 md:hidden">
                 <AnimatePresence>
-                  {paginated.map((transfer) => (
-                    <motion.button
-                      key={transfer.id}
-                      type="button"
-                      layout
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={cn(glassSurface(), 'w-full p-4 text-left transition-colors hover:bg-white/55')}
-                      onClick={() => setSelected(transfer)}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <TransferStatusBadge status={transfer.status} />
-                        <p className={cn(
-                          'text-lg font-semibold tabular-nums',
-                          isDepositRow(transfer) && 'text-emerald-700',
-                        )}>
-                          {isDepositRow(transfer) ? '+' : ''}
-                          {formatCurrency(transfer.amount)}
+                  {paginated.map((entry) => {
+                    const status = entryStatus(entry);
+                    const isBatch = entry.kind === 'batch';
+                    const isDeposit = entry.kind === 'deposit';
+                    const transfer = entry.kind === 'batch' ? null : entry.item;
+                    const createdAt =
+                      entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
+                    const amount =
+                      entry.kind === 'batch'
+                        ? entry.totalAmount
+                        : entry.item.amount;
+
+                    return (
+                      <motion.div
+                        key={entryKey(entry)}
+                        layout
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          glassSurface(),
+                          'w-full cursor-pointer p-4 text-left transition-colors hover:bg-white/55',
+                        )}
+                        onClick={() => openEntry(entry)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            openEntry(entry);
+                          }
+                        }}
+                        role="button"
+                        tabIndex={0}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <TransferStatusBadge status={status} />
+                          <p
+                            className={cn(
+                              'text-lg font-semibold tabular-nums',
+                              isDeposit && 'text-emerald-700',
+                            )}
+                          >
+                            {isDeposit ? '+' : ''}
+                            {formatCurrency(amount)}
+                          </p>
+                        </div>
+                        <p className="mt-2 flex items-center gap-2 font-medium">
+                          {isBatch ? (
+                            <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          ) : null}
+                          {isBatch
+                            ? batchDisplayTitle(entry)
+                            : isDeposit
+                              ? `Deposit · ${transfer?.beneficiary_account_name}`
+                              : transfer?.beneficiary_account_name}
                         </p>
-                      </div>
-                      <p className="mt-2 font-medium">
-                        {isDepositRow(transfer)
-                          ? `Deposit · ${transfer.beneficiary_account_name}`
-                          : transfer.beneficiary_account_name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatDate(transfer.created_at)}
-                      </p>
-                      <div className={cn(glassInset(), 'mt-3 space-y-1 px-3 py-2 text-xs')}>
-                        <div className="flex justify-between gap-3">
-                          <span className="text-muted-foreground">Ref</span>
-                          <span className="break-all text-right font-mono">
-                            {transfer.payout_ref}
-                          </span>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDate(createdAt)}
+                        </p>
+                        <div
+                          className={cn(
+                            glassInset(),
+                            'mt-3 space-y-1 px-3 py-2 text-xs',
+                          )}
+                        >
+                          {isBatch ? (
+                            <>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Batch</span>
+                                <span className="font-mono">
+                                  {entry.batchId.slice(0, 8)}
+                                </span>
+                              </div>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Payouts</span>
+                                <span>{entry.transfers.length}</span>
+                              </div>
+                            </>
+                          ) : transfer ? (
+                            <>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Ref</span>
+                                <span className="break-all text-right font-mono">
+                                  {transfer.payout_ref}
+                                </span>
+                              </div>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">UTR</span>
+                                <span className="font-mono">
+                                  {transferUtrLabel(transfer)}
+                                </span>
+                              </div>
+                            </>
+                          ) : null}
                         </div>
-                        <div className="flex justify-between gap-3">
-                          <span className="text-muted-foreground">UTR</span>
-                          <span className="font-mono">{transferUtrLabel(transfer)}</span>
-                        </div>
-                      </div>
-                    </motion.button>
-                  ))}
+                        {isBatch ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="mt-3 w-full"
+                            onClick={(event) => downloadBatchSheet(entry, event)}
+                          >
+                            <FileSpreadsheet className="mr-2 h-4 w-4" />
+                            Download batch Excel
+                          </Button>
+                        ) : null}
+                      </motion.div>
+                    );
+                  })}
                 </AnimatePresence>
               </div>
 
@@ -492,72 +597,118 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/50">
-                    {paginated.map((transfer) => (
-                      <tr
-                        key={transfer.id}
-                        className={cn(
-                          'cursor-pointer',
-                          glassTableRow(
-                            isProcessingStatus(transfer.status)
-                              ? 'attention'
-                              : 'default',
-                          ),
-                        )}
-                        onClick={() => setSelected(transfer)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            setSelected(transfer);
-                          }
-                        }}
-                        tabIndex={0}
-                        role="button"
-                        aria-label={`View transfer ${transfer.payout_ref}`}
-                      >
-                        <td className="whitespace-nowrap px-5 py-3 text-muted-foreground">
-                          {formatTableDate(transfer.created_at)}
-                        </td>
-                        <td className="max-w-[10rem] px-4 py-3">
-                          <p className="truncate font-medium">
-                            {isDepositRow(transfer)
-                              ? `Deposit · ${transfer.beneficiary_account_name}`
-                              : transfer.beneficiary_account_name}
-                          </p>
-                        </td>
-                        <td className="px-4 py-3 align-top font-mono text-xs leading-relaxed">
-                          <span className="break-all">{transfer.payout_ref}</span>
-                        </td>
-                        <td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground leading-relaxed">
-                          <span
-                            className="break-all"
-                            title={
-                              isProcessingStatus(transfer.status) &&
-                              !transferUtr(transfer)
-                                ? 'UTR pending'
-                                : undefined
+                    {paginated.map((entry) => {
+                      const status = entryStatus(entry);
+                      const isBatch = entry.kind === 'batch';
+                      const isDeposit = entry.kind === 'deposit';
+                      const transfer = entry.kind === 'batch' ? null : entry.item;
+                      const createdAt =
+                        entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
+                      const amount =
+                        entry.kind === 'batch'
+                          ? entry.totalAmount
+                          : entry.item.amount;
+
+                      return (
+                        <tr
+                          key={entryKey(entry)}
+                          className={cn(
+                            'cursor-pointer',
+                            glassTableRow(
+                              isEntryProcessing(entry) ? 'attention' : 'default',
+                            ),
+                          )}
+                          onClick={() => openEntry(entry)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              openEntry(entry);
                             }
+                          }}
+                          tabIndex={0}
+                          role="button"
+                          aria-label={
+                            isBatch
+                              ? `View batch ${entry.batchId}`
+                              : `View transfer ${transfer?.payout_ref}`
+                          }
+                        >
+                          <td className="whitespace-nowrap px-5 py-3 text-muted-foreground">
+                            {formatTableDate(createdAt)}
+                          </td>
+                          <td className="max-w-[12rem] px-4 py-3">
+                            <p className="flex items-center gap-2 truncate font-medium">
+                              {isBatch ? (
+                                <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              ) : null}
+                              <span className="truncate">
+                                {isBatch
+                                  ? batchDisplayTitle(entry)
+                                  : isDeposit
+                                    ? `Deposit · ${transfer?.beneficiary_account_name}`
+                                    : transfer?.beneficiary_account_name}
+                              </span>
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 align-top font-mono text-xs leading-relaxed">
+                            <span className="break-all">
+                              {isBatch
+                                ? entry.batchId.slice(0, 8)
+                                : transfer?.payout_ref}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground leading-relaxed">
+                            {isBatch ? (
+                              <span>{entry.transfers.length} payouts</span>
+                            ) : transfer ? (
+                              <span
+                                className="break-all"
+                                title={
+                                  isProcessingStatus(transfer.status) &&
+                                  !transferUtr(transfer)
+                                    ? 'UTR pending'
+                                    : undefined
+                                }
+                              >
+                                {transferUtrLabel(transfer)}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td
+                            className={cn(
+                              'px-4 py-3 text-right font-medium tabular-nums',
+                              isDeposit && 'text-emerald-700',
+                            )}
                           >
-                            {transferUtrLabel(transfer)}
-                          </span>
-                        </td>
-                        <td className={cn(
-                          'px-4 py-3 text-right font-medium tabular-nums',
-                          isDepositRow(transfer) && 'text-emerald-700',
-                        )}>
-                          {isDepositRow(transfer) ? '+' : ''}
-                          {formatCurrency(transfer.amount)}
-                        </td>
-                        <td className="px-5 py-3 text-right">
-                          <TransferStatusBadge status={transfer.status} />
-                        </td>
-                      </tr>
-                    ))}
+                            {isDeposit ? '+' : ''}
+                            {formatCurrency(amount)}
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              {isBatch ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  aria-label="Download batch Excel"
+                                  onClick={(event) => downloadBatchSheet(entry, event)}
+                                >
+                                  <FileSpreadsheet className="h-4 w-4" />
+                                </Button>
+                              ) : null}
+                              <TransferStatusBadge status={status} />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
               <div className="flex items-center justify-between border-t border-white/50 px-5 py-4">
                 <p className="text-sm text-muted-foreground">
-                  {PERIOD_LABEL[period]} · {filtered.length} transaction
+                  {PERIOD_LABEL[period]} · {filtered.length} item
                   {filtered.length === 1 ? '' : 's'}
                 </p>
                 <div className="flex items-center gap-2">
@@ -593,6 +744,11 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
         transfer={selected}
         onClose={() => setSelected(null)}
         onDownloadReceipt={downloadReceipt}
+      />
+
+      <BatchDetailDialog
+        entry={selectedBatch}
+        onClose={() => setSelectedBatch(null)}
       />
     </div>
   );

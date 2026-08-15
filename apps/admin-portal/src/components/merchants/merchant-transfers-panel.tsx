@@ -5,6 +5,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileText,
+  Layers,
   Search,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -47,6 +48,15 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatCurrency, formatDate, formatTableDate } from '@/lib/format';
 import { glassInset, glassSurface, glassTableHead, glassTableRow } from '@/lib/glass-styles';
+import {
+  aggregateBatchStatus,
+  batchDisplayTitle,
+  buildAdminHistoryEntries,
+  entryMatchesSearch,
+  entryMatchesStatus,
+  pendingCountInBatch,
+  type AdminHistoryEntry,
+} from '@/lib/history-display';
 import { cn } from '@/lib/utils';
 
 type TransferStatus =
@@ -226,6 +236,10 @@ export function MerchantTransfersPanel({
   const [statusFilter, setStatusFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<AdminTransfer | null>(null);
+  const [selectedBatch, setSelectedBatch] = useState<Extract<
+    AdminHistoryEntry,
+    { kind: 'batch' }
+  > | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmOptions, setConfirmOptions] =
     useState<SeriousConfirmOptions | null>(null);
@@ -313,39 +327,22 @@ export function MerchantTransfersPanel({
     void loadTransfers();
   }, [loadTransfers]);
 
+  const historyEntries = useMemo(
+    () => buildAdminHistoryEntries(transfers),
+    [transfers],
+  );
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return transfers.filter((transfer) => {
-      if (statusFilter === 'CREDITED' && !isDepositRow(transfer)) {
+    return historyEntries.filter((entry) => {
+      if (!entryMatchesStatus(entry, statusFilter)) {
         return false;
       }
 
-      if (statusFilter === 'SUCCESS' && isDepositRow(transfer)) {
-        return false;
-      }
-
-      if (
-        statusFilter !== 'all' &&
-        statusFilter !== 'CREDITED' &&
-        transfer.status !== statusFilter
-      ) {
-        return false;
-      }
-
-      if (!query) return true;
-
-      const utr = transferUtr(transfer) ?? '';
-      return (
-        transfer.beneficiary_account_name.toLowerCase().includes(query) ||
-        transfer.payout_ref.toLowerCase().includes(query) ||
-        utr.toLowerCase().includes(query) ||
-        (transfer.beneficiary_account_no ?? '').toLowerCase().includes(query) ||
-        (transfer.beneficiary_ifsc ?? '').toLowerCase().includes(query) ||
-        (transfer.virtual_account ?? '').toLowerCase().includes(query)
-      );
+      return entryMatchesSearch(entry, query);
     });
-  }, [transfers, search, statusFilter]);
+  }, [historyEntries, search, statusFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -376,6 +373,31 @@ export function MerchantTransfersPanel({
 
     return Array.from(map.values()).filter((batch) => batch.count >= 2);
   }, [transfers]);
+
+  function entryKey(entry: AdminHistoryEntry) {
+    if (entry.kind === 'batch') {
+      return `batch-${entry.batchId}`;
+    }
+
+    return entry.item.id;
+  }
+
+  function entryStatus(entry: AdminHistoryEntry) {
+    if (entry.kind === 'batch') {
+      return aggregateBatchStatus(entry.transfers);
+    }
+
+    return entry.item.status;
+  }
+
+  function openEntry(entry: AdminHistoryEntry) {
+    if (entry.kind === 'batch') {
+      setSelectedBatch(entry);
+      return;
+    }
+
+    setSelected(entry.item as AdminTransfer);
+  }
 
   useEffect(() => {
     setPage(1);
@@ -651,59 +673,119 @@ export function MerchantTransfersPanel({
           ) : (
             <>
               <div className="space-y-3 md:hidden">
-                {paginated.map((transfer) => (
-                  <div
-                    key={transfer.id}
-                    className={cn(glassSurface(), 'p-4')}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <TransferStatusBadge status={transfer.status} />
-                      <p className={cn(
-                        'font-semibold tabular-nums',
-                        isDepositRow(transfer) && 'text-emerald-700',
-                      )}>
-                        {isDepositRow(transfer) ? '+' : ''}
-                        {formatCurrency(transfer.amount)}
-                      </p>
-                    </div>
-                    <p className="mt-2 font-medium">
-                      {isDepositRow(transfer)
-                        ? `Deposit · ${transfer.beneficiary_account_name}`
-                        : transfer.beneficiary_account_name}
-                    </p>
-                    <div className={cn(glassInset(), 'mt-3 space-y-1 px-3 py-2 text-xs')}>
-                      <div className="flex justify-between gap-3">
-                        <span className="text-muted-foreground">Ref</span>
-                        <span className="font-mono">{transfer.payout_ref}</span>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <span className="text-muted-foreground">UTR</span>
-                        <span className="font-mono">{transferUtrLabel(transfer)}</span>
-                      </div>
-                    </div>
-                    {transfer.status === 'PENDING_APPROVAL' ? (
-                      <div className="mt-3 flex gap-2">
+                {paginated.map((entry) => {
+                  const status = entryStatus(entry);
+                  const isBatch = entry.kind === 'batch';
+                  const isDeposit = entry.kind === 'deposit';
+                  const transfer = entry.kind === 'batch' ? null : (entry.item as AdminTransfer);
+                  const createdAt =
+                    entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
+                  const amount =
+                    entry.kind === 'batch' ? entry.totalAmount : entry.item.amount;
+                  const pendingInBatch = isBatch ? pendingCountInBatch(entry) : 0;
+
+                  return (
+                    <div
+                      key={entryKey(entry)}
+                      className={cn(glassSurface(), 'p-4')}
+                    >
+                      <button
+                        type="button"
+                        className="w-full text-left"
+                        onClick={() => openEntry(entry)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <TransferStatusBadge status={status} />
+                          <p
+                            className={cn(
+                              'font-semibold tabular-nums',
+                              isDeposit && 'text-emerald-700',
+                            )}
+                          >
+                            {isDeposit ? '+' : ''}
+                            {formatCurrency(amount)}
+                          </p>
+                        </div>
+                        <p className="mt-2 flex items-center gap-2 font-medium">
+                          {isBatch ? (
+                            <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          ) : null}
+                          {isBatch
+                            ? batchDisplayTitle(entry)
+                            : isDeposit
+                              ? `Deposit · ${transfer?.beneficiary_account_name}`
+                              : transfer?.beneficiary_account_name}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {formatTableDate(createdAt)}
+                        </p>
+                        <div className={cn(glassInset(), 'mt-3 space-y-1 px-3 py-2 text-xs')}>
+                          {isBatch ? (
+                            <>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Batch</span>
+                                <span className="font-mono">{entry.batchId.slice(0, 8)}</span>
+                              </div>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Payouts</span>
+                                <span>{entry.transfers.length}</span>
+                              </div>
+                            </>
+                          ) : transfer ? (
+                            <>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Ref</span>
+                                <span className="font-mono">{transfer.payout_ref}</span>
+                              </div>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">UTR</span>
+                                <span className="font-mono">{transferUtrLabel(transfer)}</span>
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      </button>
+                      {isBatch && pendingInBatch > 0 ? (
                         <Button
                           size="sm"
-                          className="flex-1"
-                          disabled={actionId === transfer.id}
-                          onClick={() => handleApprove(transfer)}
+                          className="mt-3 w-full"
+                          disabled={batchActionId === entry.batchId}
+                          onClick={() =>
+                            handleApproveBatch(
+                              entry.batchId,
+                              pendingInBatch,
+                              entry.totalAmount,
+                            )
+                          }
                         >
-                          Approve
+                          {batchActionId === entry.batchId
+                            ? 'Approving…'
+                            : `Approve all (${pendingInBatch})`}
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-1 text-destructive"
-                          disabled={actionId === transfer.id}
-                          onClick={() => handleReject(transfer)}
-                        >
-                          Reject
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
+                      ) : transfer?.status === 'PENDING_APPROVAL' ? (
+                        <div className="mt-3 flex gap-2">
+                          <Button
+                            size="sm"
+                            className="flex-1"
+                            disabled={actionId === transfer.id}
+                            onClick={() => handleApprove(transfer)}
+                          >
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 text-destructive"
+                            disabled={actionId === transfer.id}
+                            onClick={() => handleReject(transfer)}
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="hidden overflow-x-auto md:block">
@@ -720,87 +802,134 @@ export function MerchantTransfersPanel({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/50">
-                    {paginated.map((transfer) => (
-                      <tr
-                        key={transfer.id}
-                        className={glassTableRow(
-                          transfer.status === 'PENDING_APPROVAL'
-                            ? 'attention'
-                            : 'default',
-                        )}
-                      >
-                        <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">
-                          {formatTableDate(transfer.created_at)}
-                        </td>
-                        <td className="px-3 py-3 font-medium">
-                          {isDepositRow(transfer)
-                            ? `Deposit · ${transfer.beneficiary_account_name}`
-                            : transfer.beneficiary_account_name}
-                        </td>
-                        <td className="px-3 py-3 font-mono text-xs">
-                          {transfer.payout_ref}
-                        </td>
-                        <td className="px-3 py-3 font-mono text-xs text-muted-foreground">
-                          <span
-                            title={
-                              !transferUtr(transfer) &&
-                              (transfer.status === 'PENDING_APPROVAL' ||
-                                transfer.status === 'PROCESSING')
-                                ? 'UTR pending'
-                                : undefined
-                            }
-                          >
-                            {transferUtrLabel(transfer)}
-                          </span>
-                        </td>
-                        <td className={cn(
-                          'px-3 py-3 text-right font-medium tabular-nums',
-                          isDepositRow(transfer) && 'text-emerald-700',
-                        )}>
-                          {isDepositRow(transfer) ? '+' : ''}
-                          {formatCurrency(transfer.amount)}
-                        </td>
-                        <td className="px-3 py-3 text-right">
-                          <TransferStatusBadge status={transfer.status} />
-                        </td>
-                        <td className="px-3 py-3 text-right">
-                          {transfer.status === 'PENDING_APPROVAL' ? (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                size="sm"
-                                disabled={actionId === transfer.id}
-                                onClick={() => handleApprove(transfer)}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={actionId === transfer.id}
-                                onClick={() => handleReject(transfer)}
-                              >
-                                Reject
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setSelected(transfer)}
-                            >
-                              View
-                            </Button>
+                    {paginated.map((entry) => {
+                      const status = entryStatus(entry);
+                      const isBatch = entry.kind === 'batch';
+                      const isDeposit = entry.kind === 'deposit';
+                      const transfer =
+                        entry.kind === 'batch' ? null : (entry.item as AdminTransfer);
+                      const createdAt =
+                        entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
+                      const amount =
+                        entry.kind === 'batch' ? entry.totalAmount : entry.item.amount;
+                      const pendingInBatch = isBatch ? pendingCountInBatch(entry) : 0;
+
+                      return (
+                        <tr
+                          key={entryKey(entry)}
+                          className={glassTableRow(
+                            status === 'PENDING_APPROVAL' ? 'attention' : 'default',
                           )}
-                        </td>
-                      </tr>
-                    ))}
+                        >
+                          <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">
+                            {formatTableDate(createdAt)}
+                          </td>
+                          <td className="px-3 py-3 font-medium">
+                            <span className="inline-flex items-center gap-2">
+                              {isBatch ? (
+                                <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              ) : null}
+                              {isBatch
+                                ? batchDisplayTitle(entry)
+                                : isDeposit
+                                  ? `Deposit · ${transfer?.beneficiary_account_name}`
+                                  : transfer?.beneficiary_account_name}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 font-mono text-xs">
+                            {isBatch ? entry.batchId.slice(0, 8) : transfer?.payout_ref}
+                          </td>
+                          <td className="px-3 py-3 font-mono text-xs text-muted-foreground">
+                            {isBatch ? (
+                              <span>{entry.transfers.length} payouts</span>
+                            ) : transfer ? (
+                              <span>{transferUtrLabel(transfer)}</span>
+                            ) : null}
+                          </td>
+                          <td
+                            className={cn(
+                              'px-3 py-3 text-right font-medium tabular-nums',
+                              isDeposit && 'text-emerald-700',
+                            )}
+                          >
+                            {isDeposit ? '+' : ''}
+                            {formatCurrency(amount)}
+                          </td>
+                          <td className="px-3 py-3 text-right">
+                            <TransferStatusBadge status={status} />
+                          </td>
+                          <td className="px-3 py-3 text-right">
+                            {isBatch && pendingInBatch > 0 ? (
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  disabled={batchActionId === entry.batchId}
+                                  onClick={() =>
+                                    handleApproveBatch(
+                                      entry.batchId,
+                                      pendingInBatch,
+                                      entry.totalAmount,
+                                    )
+                                  }
+                                >
+                                  {batchActionId === entry.batchId
+                                    ? 'Approving…'
+                                    : 'Approve all'}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => openEntry(entry)}
+                                >
+                                  View
+                                </Button>
+                              </div>
+                            ) : isBatch ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => openEntry(entry)}
+                              >
+                                View
+                              </Button>
+                            ) : transfer?.status === 'PENDING_APPROVAL' ? (
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  disabled={actionId === transfer.id}
+                                  onClick={() => handleApprove(transfer)}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={actionId === transfer.id}
+                                  onClick={() => handleReject(transfer)}
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setSelected(transfer)}
+                              >
+                                View
+                              </Button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
               <div className="mt-6 flex items-center justify-between border-t border-white/50 pt-4">
                 <p className="text-sm text-muted-foreground">
-                  {filtered.length} transaction{filtered.length === 1 ? '' : 's'}
+                  {filtered.length} item{filtered.length === 1 ? '' : 's'}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
@@ -900,6 +1029,84 @@ export function MerchantTransfersPanel({
                 </>
               )}
             </dl>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!selectedBatch}
+        onOpenChange={() => setSelectedBatch(null)}
+      >
+        <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedBatch ? batchDisplayTitle(selectedBatch) : 'Batch'}
+            </DialogTitle>
+          </DialogHeader>
+          {selectedBatch ? (
+            <div className="max-h-[50vh] overflow-auto">
+              <p className="mb-3 text-sm text-muted-foreground">
+                {selectedBatch.transfers.length} payouts ·{' '}
+                {formatCurrency(selectedBatch.totalAmount)}
+              </p>
+              <table className="min-w-full text-left text-sm">
+                <thead className={glassTableHead()}>
+                  <tr>
+                    <th className="px-3 py-2">Beneficiary</th>
+                    <th className="px-3 py-2">Account</th>
+                    <th className="px-3 py-2 text-right">Amount</th>
+                    <th className="px-3 py-2">UTR</th>
+                    <th className="px-3 py-2 text-right">Status</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/50">
+                  {selectedBatch.transfers.map((row) => {
+                    const transfer = row as AdminTransfer;
+                    return (
+                      <tr key={transfer.id}>
+                        <td className="px-3 py-2 font-medium">
+                          {transfer.beneficiary_account_name}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {transfer.beneficiary_account_no ?? '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {formatCurrency(transfer.amount)}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {transferUtrLabel(transfer)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <TransferStatusBadge status={transfer.status} />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {transfer.status === 'PENDING_APPROVAL' ? (
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                size="sm"
+                                disabled={actionId === transfer.id}
+                                onClick={() => handleApprove(transfer)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={actionId === transfer.id}
+                                onClick={() => handleReject(transfer)}
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           ) : null}
         </DialogContent>
       </Dialog>

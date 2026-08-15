@@ -23,9 +23,17 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { formatCurrency } from '@/lib/format';
 import { glassInset } from '@/lib/glass-styles';
+import { PAYOUT_MODES, type BankPayoutMode } from '@/lib/payout-mode';
 import { validateTransferFields } from '@/lib/transfer-validation';
 import { cn } from '@/lib/utils';
 
@@ -51,6 +59,7 @@ export function TransferWizard({
   const [beneficiaryName, setBeneficiaryName] = useState('');
   const [accountNo, setAccountNo] = useState('');
   const [ifsc, setIfsc] = useState('');
+  const [payoutMode, setPayoutMode] = useState<BankPayoutMode>('IMPS');
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
   const parsedAmount = Number.parseFloat(amount) || 0;
@@ -65,8 +74,9 @@ export function TransferWizard({
         accountNo,
         ifsc,
         availableBalance,
+        payoutMode,
       }),
-    [amount, beneficiaryName, accountNo, ifsc, availableBalance],
+    [amount, beneficiaryName, accountNo, ifsc, availableBalance, payoutMode],
   );
 
   const formValid = Object.keys(errors).length === 0;
@@ -82,6 +92,7 @@ export function TransferWizard({
     setBeneficiaryName('');
     setAccountNo('');
     setIfsc('');
+    setPayoutMode('IMPS');
     setCompletedRef(null);
     setCompletedBeneficiary('');
     setCompletedAmount(0);
@@ -100,7 +111,7 @@ export function TransferWizard({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: parsedAmount,
-          payout_mode: 'IMPS',
+          payout_mode: payoutMode,
           beneficiary_account_name: beneficiaryName.trim(),
           beneficiary_account_no: accountNo.trim(),
           beneficiary_ifsc: ifsc.trim().toUpperCase(),
@@ -151,7 +162,7 @@ export function TransferWizard({
           <GlassCardDescription>
             {submitted
               ? 'Your transfer is processing.'
-              : `Available ${formatCurrency(availableBalance)} · IMPS`}
+              : `Available ${formatCurrency(availableBalance)} · ${payoutMode}`}
           </GlassCardDescription>
         </GlassCardHeader>
         <GlassCardContent className="p-5 pt-0">
@@ -188,6 +199,31 @@ export function TransferWizard({
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="payoutMode">Payout mode</Label>
+                      <Select
+                        value={payoutMode}
+                        onValueChange={(value) =>
+                          setPayoutMode(value as BankPayoutMode)
+                        }
+                      >
+                        <SelectTrigger id="payoutMode" aria-label="Payout mode">
+                          <SelectValue placeholder="Select mode" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {PAYOUT_MODES.map((mode) => (
+                            <SelectItem key={mode} value={mode}>
+                              {mode}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {payoutMode === 'RTGS' ? (
+                        <p className="text-xs text-muted-foreground">
+                          RTGS minimum is ₹2,00,000
+                        </p>
+                      ) : null}
+                    </div>
                     <div className="space-y-2">
                       <Label htmlFor="amount">Amount (INR)</Label>
                       <div className="relative">
@@ -306,8 +342,8 @@ export function TransferWizard({
                   <CheckCircle2 className="h-12 w-12 text-emerald-500" />
                   <p className="mt-4 text-lg font-semibold">Transfer submitted</p>
                   <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-                    {completedBeneficiary} · {formatCurrency(completedAmount)}.
-                    This payout is now processing.
+                    {completedBeneficiary} · {formatCurrency(completedAmount)} ·{' '}
+                    {payoutMode}. This payout is now processing.
                   </p>
                   <p className="mt-3 text-xs text-muted-foreground">Payment ref</p>
                   <p className="mt-1 font-mono text-sm">{completedRef}</p>
@@ -345,6 +381,10 @@ export function TransferWizard({
             <div className="flex justify-between gap-4">
               <dt className="text-muted-foreground">Beneficiary</dt>
               <dd className="text-right font-medium">{beneficiaryName.trim()}</dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Mode</dt>
+              <dd className="font-medium">{payoutMode}</dd>
             </div>
             <div className="flex justify-between gap-4">
               <dt className="text-muted-foreground">Amount</dt>

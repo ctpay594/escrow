@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase';
 import type {
+  AdminDepositListItem,
   AdminMerchantListItem,
   CreateMerchantInput,
   MerchantAccountStatus,
@@ -1125,6 +1126,44 @@ export class MerchantsService {
 
     return (data ?? []).map((row) => ({
       id: row.id as string,
+      amount: Number(row.amount ?? 0),
+      utr: (row.utr as string | null) ?? null,
+      virtual_account: String(row.virtual_account ?? ''),
+      remitter_name: (row.remitter_name as string | null) ?? null,
+      remitter_account: (row.remitter_account as string | null) ?? null,
+      created_at: row.created_at as string,
+    }));
+  }
+
+  async listDepositsForAdmin(): Promise<AdminDepositListItem[]> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('deposits')
+      .select(
+        'id, user_id, merchant_id, amount, utr, virtual_account, remitter_name, remitter_account, created_at',
+      )
+      .order('created_at', { ascending: false })
+      .limit(2000);
+
+    if (error) {
+      if (
+        error.message.toLowerCase().includes('deposits') &&
+        (error.message.toLowerCase().includes('does not exist') ||
+          error.code === '42P01' ||
+          error.code === 'PGRST205')
+      ) {
+        return [];
+      }
+
+      throw new InternalServerErrorException(
+        error.message ?? 'Failed to load deposits',
+      );
+    }
+
+    return (data ?? []).map((row) => ({
+      id: row.id as string,
+      user_id: (row.user_id as string | null) ?? null,
+      merchant_id: (row.merchant_id as string | null) ?? null,
       amount: Number(row.amount ?? 0),
       utr: (row.utr as string | null) ?? null,
       virtual_account: String(row.virtual_account ?? ''),

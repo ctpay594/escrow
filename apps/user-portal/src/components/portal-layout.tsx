@@ -4,7 +4,8 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { PortalShell } from '@/components/portal-shell';
-import type { MerchantProfile, SessionUser, TransferItem } from '@/lib/types';
+import { parseUserTransfersResponse } from '@/lib/history-display';
+import type { MerchantProfile, SessionUser } from '@/lib/types';
 
 export function PortalLayout({
   children,
@@ -21,13 +22,11 @@ export function PortalLayout({
   useEffect(() => {
     void fetch('/api/transfers')
       .then((response) => response.json())
-      .then((data: TransferItem[]) => {
-        if (!Array.isArray(data)) {
-          return;
-        }
+      .then((data) => {
+        const { transfers } = parseUserTransfersResponse(data);
 
         setProcessingCount(
-          data.filter(
+          transfers.filter(
             (transfer) =>
               transfer.status === 'PENDING_APPROVAL' ||
               transfer.status === 'PROCESSING',

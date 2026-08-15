@@ -97,3 +97,8 @@ export interface ApproveBatchResult {
   failed: { transfer_id: string; payout_ref: string; message: string }[];
   transfers: PublicTransfer[];
 }
+
+export interface UserTransfersListResult {
+  transfers: PublicTransfer[];
+  batches: TransferBatchSummary[];
+}

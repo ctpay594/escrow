@@ -5,6 +5,7 @@ export interface TransferFieldErrors {
   beneficiaryName?: string;
   accountNo?: string;
   ifsc?: string;
+  payoutMode?: string;
 }
 
 export function validateTransferFields(input: {
@@ -13,6 +14,7 @@ export function validateTransferFields(input: {
   accountNo: string;
   ifsc: string;
   availableBalance: number;
+  payoutMode?: string;
 }): TransferFieldErrors {
   const errors: TransferFieldErrors = {};
   const parsedAmount = Number.parseFloat(input.amount);
@@ -23,6 +25,12 @@ export function validateTransferFields(input: {
     errors.amount = 'Enter a valid amount greater than zero';
   } else if (parsedAmount > input.availableBalance) {
     errors.amount = 'Amount exceeds your available balance';
+  } else if (
+    input.payoutMode === 'RTGS' &&
+    !Number.isNaN(parsedAmount) &&
+    parsedAmount < 200_000
+  ) {
+    errors.amount = 'RTGS requires a minimum of ₹2,00,000';
   }
 
   const beneficiaryName = input.beneficiaryName?.trim() ?? '';

@@ -181,6 +181,11 @@ export class AdminUsersService {
 
     return {
       bank_balance: balanceResult.balance,
+      available_balance: balanceResult.availableBalance ?? balanceResult.balance,
+      hold_amount: balanceResult.holdAmount ?? null,
+      lien_amount: balanceResult.lienAmount ?? null,
+      unclear_amount: balanceResult.unclearAmount ?? null,
+      ledger_balance: balanceResult.ledgerBalance ?? null,
       account_no: balanceResult.accountNo ?? null,
       customer_id: balanceResult.customerId ?? null,
       message: 'Company current-account balance (not a merchant ledger)',

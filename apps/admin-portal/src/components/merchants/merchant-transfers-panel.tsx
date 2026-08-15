@@ -188,7 +188,11 @@ function transferDestination(transfer: AdminTransfer): string {
 const PAGE_SIZE = 8;
 
 function transferUtr(transfer: AdminTransfer) {
-  return transfer.utr ?? transfer.bank_ref ?? null;
+  if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {
+    return null;
+  }
+
+  return transfer.utr ?? null;
 }
 
 function transferUtrLabel(transfer: AdminTransfer) {

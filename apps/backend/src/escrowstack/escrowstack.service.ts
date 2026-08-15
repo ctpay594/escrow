@@ -35,7 +35,8 @@ export class EscrowStackService {
       '/v1/pt/hdfc/get_account_balance',
       {},
     );
-    const balance = this.extractBalance(response);
+    const breakdown = this.extractBalanceBreakdown(response);
+    const balance = breakdown.available ?? this.extractBalance(response);
     const accountNo = this.pickString(response, [
       'data.account_no',
       'data.AC_NO',
@@ -51,13 +52,19 @@ export class EscrowStackService {
       ]) ?? this.pickNumericString(response, ['data.customer_id']);
 
     this.logger.log(
-      `Account balance fetched: ${balance}` +
-        (accountNo ? ` account_no=${accountNo}` : '') +
-        (customerId ? ` customer_id=${customerId}` : ''),
+      `Account balance fetched: available=${balance}` +
+        (breakdown.hold != null ? ` hold=${breakdown.hold}` : '') +
+        (breakdown.lien != null ? ` lien=${breakdown.lien}` : '') +
+        (accountNo ? ` account_no=${accountNo}` : ''),
     );
 
     return {
       balance,
+      availableBalance: breakdown.available ?? balance,
+      holdAmount: breakdown.hold,
+      lienAmount: breakdown.lien,
+      unclearAmount: breakdown.unclear,
+      ledgerBalance: breakdown.ledger,
       accountNo,
       customerId,
       raw: response,
@@ -354,6 +361,74 @@ export class EscrowStackService {
     return 0;
   }
 
+  private extractBalanceBreakdown(response: Record<string, unknown>): {
+    available?: number;
+    hold?: number;
+    lien?: number;
+    unclear?: number;
+    ledger?: number;
+  } {
+    const amounts = this.collectNumericFields(response);
+    const pick = (...needles: string[]) => {
+      for (const [key, value] of amounts) {
+        if (needles.some((needle) => key.includes(needle))) {
+          return value;
+        }
+      }
+
+      return undefined;
+    };
+
+    return {
+      available: pick(
+        'avaliable_balance',
+        'available_balance',
+        'available',
+        'clear_balance',
+        'acavail',
+      ),
+      hold: pick('hold_amount', 'holdamt', 'hold_amt', 'achold', 'hold'),
+      lien: pick('lien_amount', 'lienamt', 'lien_amt', 'aclien', 'lien'),
+      unclear: pick('unclear', 'float'),
+      ledger: pick('ledger_balance', 'account_balance', 'acledger', 'ledger'),
+    };
+  }
+
+  private collectNumericFields(
+    value: unknown,
+    prefix = '',
+    into: Array<[string, number]> = [],
+  ): Array<[string, number]> {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      into.push([prefix, value]);
+      return into;
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value.replace(/,/g, ''));
+      if (Number.isFinite(parsed) && prefix) {
+        into.push([prefix, parsed]);
+      }
+      return into;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => {
+        this.collectNumericFields(item, `${prefix}[${index}]`, into);
+      });
+      return into;
+    }
+
+    if (typeof value === 'object' && value !== null) {
+      for (const [key, nested] of Object.entries(value)) {
+        const next = `${prefix}${prefix ? '.' : ''}${key}`.toLowerCase();
+        this.collectNumericFields(nested, next, into);
+      }
+    }
+
+    return into;
+  }
+
   private extractErrorMessage(
     response: Record<string, unknown>,
   ): string | null {
@@ -417,13 +492,14 @@ export class EscrowStackService {
       const status =
         this.pickString(item, [
           'TXN_STATUS',
-          'OD_STATUS',
+          'txn_status',
           'status',
           'payout_status',
           'state',
-          'code',
-        ]) ?? 'unknown';
-      const utr = this.pickString(item, ['UTR_NO', 'utr', 'UTR']);
+        ]) ??
+        this.pickString(item, ['OD_STATUS', 'code']) ??
+        'unknown';
+      const utr = this.pickString(item, ['UTR_NO', 'utr_no', 'UTR']);
       const bankRef = this.pickString(item, [
         'TXN_REFERENCE_NO',
         'REFERENCE_NO',

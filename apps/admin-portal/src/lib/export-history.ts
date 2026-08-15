@@ -35,7 +35,11 @@ function csvCell(value: string | number) {
 }
 
 function transferUtr(transfer: AdminHistoryTransfer) {
-  return transfer.utr ?? transfer.bank_ref ?? '';
+  if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {
+    return '';
+  }
+
+  return transfer.utr ?? '';
 }
 
 function statementRowFromTransfer(transfer: AdminHistoryTransfer) {

@@ -493,7 +493,7 @@ export class TransfersService {
     userId?: string;
     merchantId?: string;
   }): Promise<ReconcileTransfersResult> {
-    let query = this.supabaseService
+    let processingQuery = this.supabaseService
       .getAdminClient()
       .from('transfers')
       .select('*')
@@ -501,22 +501,48 @@ export class TransfersService {
       .order('created_at', { ascending: false });
 
     if (options?.userId) {
-      query = query.eq('user_id', options.userId);
+      processingQuery = processingQuery.eq('user_id', options.userId);
     }
 
     if (options?.merchantId) {
-      query = query.eq('merchant_id', options.merchantId);
+      processingQuery = processingQuery.eq('merchant_id', options.merchantId);
     }
 
-    const { data, error } = await query;
+    const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    let recentSuccessQuery = this.supabaseService
+      .getAdminClient()
+      .from('transfers')
+      .select('*')
+      .eq('status', 'SUCCESS')
+      .gte('created_at', since)
+      .order('created_at', { ascending: false });
 
-    if (error) {
+    if (options?.userId) {
+      recentSuccessQuery = recentSuccessQuery.eq('user_id', options.userId);
+    }
+
+    if (options?.merchantId) {
+      recentSuccessQuery = recentSuccessQuery.eq(
+        'merchant_id',
+        options.merchantId,
+      );
+    }
+
+    const [processingResult, successResult] = await Promise.all([
+      processingQuery,
+      recentSuccessQuery,
+    ]);
+
+    if (processingResult.error || successResult.error) {
       throw new InternalServerErrorException(
         'Failed to load processing transfers',
       );
     }
 
-    const transfers = (data ?? []) as TransferRecord[];
+    const transfers = [
+      ...((processingResult.data ?? []) as TransferRecord[]),
+      ...((successResult.data ?? []) as TransferRecord[]),
+    ];
 
     if (transfers.length === 0) {
       return {
@@ -573,12 +599,9 @@ export class TransfersService {
       const updatedTransfer = updatedTransfers.find(
         (item) => item.id === transfer.id,
       );
+      const status = updatedTransfer?.status ?? transfer.status;
 
-      if (!updatedTransfer) {
-        return true;
-      }
-
-      return updatedTransfer.status === 'PROCESSING';
+      return status === 'PROCESSING';
     }).length;
 
     return {
@@ -606,31 +629,30 @@ export class TransfersService {
       return { outcome: 'transfer_not_found' };
     }
 
-    if (transfer.status !== 'PROCESSING') {
-      if (transfer.status === 'SUCCESS' || transfer.status === 'FAILED') {
-        return { outcome: 'already_final' };
-      }
-
-      return { outcome: `ignored_status_${transfer.status}` };
-    }
-
     const entry = {
       status:
-        this.pickWebhookString(raw, 'status') ??
         this.pickWebhookString(raw, 'TXN_STATUS') ??
+        this.pickWebhookString(raw, 'status') ??
         this.pickWebhookString(raw, 'code') ??
         '',
-      utr:
-        this.pickWebhookString(raw, 'bankref') ??
-        this.pickWebhookString(raw, 'UTR_NO') ??
-        this.pickWebhookString(raw, 'utr') ??
-        undefined,
+      utr: this.pickWebhookString(raw, 'UTR_NO') ?? undefined,
       bank_ref:
-        this.pickWebhookString(raw, 'bankref') ??
         this.pickWebhookString(raw, 'TXN_REFERENCE_NO') ??
+        this.pickWebhookString(raw, 'bankref') ??
         undefined,
       raw,
     };
+
+    if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {
+      return { outcome: 'already_final' };
+    }
+
+    if (
+      transfer.status !== 'PROCESSING' &&
+      transfer.status !== 'SUCCESS'
+    ) {
+      return { outcome: `ignored_status_${transfer.status}` };
+    }
 
     const applied = await this.applyPayoutStatusUpdate(transfer, entry);
 
@@ -680,15 +702,34 @@ export class TransfersService {
       raw: Record<string, unknown>;
     },
   ): Promise<PublicTransfer | null> {
-    if (transfer.status !== 'PROCESSING') {
+    const mappedStatus = this.mapEscrowStatus(entry.status, entry.raw);
+    const bankRef = entry.bank_ref?.trim() || null;
+    const utr = entry.utr?.trim() || null;
+
+    if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {
       return null;
     }
 
-    const mappedStatus = this.mapEscrowStatus(entry.status, entry.raw);
-    const bankRef = entry.bank_ref?.trim() || null;
-    const utr = entry.utr?.trim() || bankRef;
+    if (transfer.status === 'SUCCESS' && mappedStatus !== 'FAILED') {
+      if (!utr || transfer.utr) {
+        return null;
+      }
 
-    if (mappedStatus === 'PROCESSING') {
+      const { error: utrError } = await this.supabaseService
+        .getAdminClient()
+        .from('transfers')
+        .update({ utr, bank_ref: bankRef ?? transfer.bank_ref })
+        .eq('id', transfer.id)
+        .eq('status', 'SUCCESS');
+
+      if (utrError) {
+        return null;
+      }
+
+      return this.toPublicTransfer(await this.fetchTransferRowById(transfer.id));
+    }
+
+    if (transfer.status === 'PROCESSING' && mappedStatus === 'PROCESSING') {
       if (!utr && !bankRef) {
         return null;
       }
@@ -697,7 +738,7 @@ export class TransfersService {
         .getAdminClient()
         .from('transfers')
         .update({
-          utr,
+          ...(utr ? { utr } : {}),
           bank_ref: bankRef,
         })
         .eq('id', transfer.id)
@@ -707,21 +748,30 @@ export class TransfersService {
         return null;
       }
 
-      return this.toPublicTransfer(
-        await this.fetchTransferRowById(transfer.id),
-      );
+      return this.toPublicTransfer(await this.fetchTransferRowById(transfer.id));
     }
 
-    if (mappedStatus === 'SUCCESS') {
+    if (mappedStatus === 'PROCESSING') {
+      return null;
+    }
+
+    if (mappedStatus === 'SUCCESS' && transfer.status === 'PROCESSING') {
       await this.merchantsService.clearPendingForSuccessfulTransfer(
         transfer.user_id,
         Number(transfer.amount),
       );
-    } else if (mappedStatus === 'FAILED') {
+    } else if (mappedStatus === 'FAILED' && transfer.status === 'PROCESSING') {
       await this.merchantsService.releaseHeldFunds(
         transfer.user_id,
         Number(transfer.amount),
       );
+    } else if (mappedStatus === 'FAILED' && transfer.status === 'SUCCESS') {
+      await this.merchantsService.creditBackAfterBankFailure(
+        transfer.user_id,
+        Number(transfer.amount),
+      );
+    } else {
+      return null;
     }
 
     const { error: updateError } = await this.supabaseService
@@ -729,12 +779,12 @@ export class TransfersService {
       .from('transfers')
       .update({
         status: mappedStatus,
-        utr,
+        utr: mappedStatus === 'SUCCESS' ? utr : transfer.utr,
         bank_ref: bankRef,
         escrow_response: entry.raw,
       })
       .eq('id', transfer.id)
-      .eq('status', 'PROCESSING');
+      .in('status', ['PROCESSING', 'SUCCESS']);
 
     if (updateError) {
       return null;
@@ -747,42 +797,46 @@ export class TransfersService {
     status: string,
     raw: Record<string, unknown>,
   ): TransferStatus {
-    const normalized = status.trim().toLowerCase();
-    const code = this.pickStatusCode(raw);
+    const txnStatus = (
+      this.pickWebhookString(raw, 'TXN_STATUS') ??
+      this.pickWebhookString(raw, 'txn_status') ??
+      status
+    )
+      .trim()
+      .toLowerCase();
+    const odStatus = (
+      this.pickWebhookString(raw, 'OD_STATUS') ??
+      this.pickWebhookString(raw, 'od_status') ??
+      this.pickStatusCode(raw) ??
+      ''
+    )
+      .trim()
+      .toLowerCase();
 
     if (
-      code === 'po_bp_dcp' ||
-      code === 'txsett' ||
-      normalized === 'processed' ||
-      normalized === 'completed' ||
-      normalized === 'complete' ||
-      normalized === 'success' ||
-      normalized === 'txsett' ||
-      normalized === 'settled'
-    ) {
-      return 'SUCCESS';
-    }
-
-    if (
-      code === 'err_bp_ipr' ||
-      code === 'txrej' ||
-      code === 'txfail' ||
-      normalized.includes('fail') ||
-      normalized.includes('error') ||
-      normalized.includes('reject') ||
-      normalized.includes('return') ||
-      normalized.includes('revers')
+      odStatus === 'err_bp_ipr' ||
+      odStatus === 'txrej' ||
+      odStatus === 'txfail' ||
+      txnStatus.includes('fail') ||
+      txnStatus.includes('error') ||
+      txnStatus.includes('reject') ||
+      txnStatus.includes('return') ||
+      txnStatus.includes('revers') ||
+      txnStatus.includes('decline')
     ) {
       return 'FAILED';
     }
 
     if (
-      code === 'el_ps' ||
-      normalized === 'pending' ||
-      normalized === 'submitted' ||
-      normalized === 'unknown'
+      odStatus === 'po_bp_dcp' ||
+      odStatus === 'txsett' ||
+      txnStatus === 'completed' ||
+      txnStatus === 'complete' ||
+      txnStatus === 'success' ||
+      txnStatus === 'txsett' ||
+      txnStatus === 'settled'
     ) {
-      return 'PROCESSING';
+      return 'SUCCESS';
     }
 
     return 'PROCESSING';
@@ -798,7 +852,7 @@ export class TransfersService {
   }
 
   private pickStatusCode(raw: Record<string, unknown>): string | null {
-    const code = raw.code ?? raw.status_code ?? raw.statusCode ?? raw.OD_STATUS ?? raw.TXN_STATUS;
+    const code = raw.OD_STATUS ?? raw.code ?? raw.status_code ?? raw.statusCode;
 
     if (typeof code === 'string') {
       return code.trim().toLowerCase();

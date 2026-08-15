@@ -1,7 +1,11 @@
 import type { TransferItem } from '@/lib/types';
 
 export function transferUtr(transfer: TransferItem) {
-  return transfer.utr ?? transfer.bank_ref ?? null;
+  if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {
+    return null;
+  }
+
+  return transfer.utr ?? null;
 }
 
 export function transferDestination(transfer: TransferItem): string {

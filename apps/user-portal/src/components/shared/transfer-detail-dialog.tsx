@@ -150,6 +150,12 @@ export function TransferDetailDialog({
           <DetailRow label="Status">
             <TransferStatusBadge status={transfer.status} />
           </DetailRow>
+          {transfer.status === 'FAILED' ? (
+            <DetailRow
+              label="Balance"
+              value="Amount credited back to your available balance"
+            />
+          ) : null}
           <DetailRow label="Mode" value={transfer.payout_mode ?? 'IMPS'} />
           <DetailRow label="Payment ref" mono>
             <MonoCopyValue label="Payment ref" value={transfer.payout_ref} />

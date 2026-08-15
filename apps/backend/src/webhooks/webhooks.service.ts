@@ -117,9 +117,18 @@ export class WebhooksService {
     body: Record<string, unknown>,
     callbackId: string | null,
   ): Promise<string> {
-    if (typeof body.payout_ref === 'string' && body.payout_ref.trim()) {
-      await this.transfersService.handleEscrowPayoutWebhook(body);
-      return 'payout_webhook';
+    const payoutBodies = this.extractPayoutWebhookBodies(body);
+
+    if (payoutBodies.length > 0) {
+      const outcomes: string[] = [];
+
+      for (const payoutBody of payoutBodies) {
+        const result =
+          await this.transfersService.handleEscrowPayoutWebhook(payoutBody);
+        outcomes.push(result.outcome);
+      }
+
+      return `payout_webhook:${outcomes.join(',')}`;
     }
 
     const alerts = parseCollectAlerts(body);
@@ -147,6 +156,33 @@ export class WebhooksService {
     }
 
     return 'ignored_not_collect_or_payout';
+  }
+
+  private extractPayoutWebhookBodies(
+    body: Record<string, unknown>,
+  ): Record<string, unknown>[] {
+    const records: Record<string, unknown>[] = [];
+    const data = body.data;
+
+    if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+      const allRecords = (data as { ALL_RECORDS?: unknown }).ALL_RECORDS;
+      if (Array.isArray(allRecords)) {
+        for (const item of allRecords) {
+          if (item && typeof item === 'object' && !Array.isArray(item)) {
+            records.push(item as Record<string, unknown>);
+          }
+        }
+      }
+    }
+
+    if (
+      typeof body.payout_ref === 'string' ||
+      typeof body.PAYMENTREFNO === 'string'
+    ) {
+      records.push(body);
+    }
+
+    return records;
   }
 
   private async markCallback(

@@ -1,5 +1,10 @@
 export interface EscrowBalanceResult {
   balance: number;
+  availableBalance?: number;
+  holdAmount?: number;
+  lienAmount?: number;
+  unclearAmount?: number;
+  ledgerBalance?: number;
   accountNo?: string;
   customerId?: string;
   raw: Record<string, unknown>;

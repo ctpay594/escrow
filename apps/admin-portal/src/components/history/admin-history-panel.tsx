@@ -133,7 +133,11 @@ function depositToHistoryRow(
 }
 
 function transferUtr(transfer: AdminHistoryTransfer) {
-  return transfer.utr ?? transfer.bank_ref ?? null;
+  if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {
+    return null;
+  }
+
+  return transfer.utr ?? null;
 }
 
 function entryStatus(entry: AdminHistoryEntry) {

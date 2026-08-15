@@ -20,7 +20,7 @@ export function transferStatusLabel(status: string): string {
     case 'CREDITED':
       return 'Credited';
     case 'FAILED':
-      return 'Failed';
+      return 'Failed · credited back';
     case 'REJECTED':
       return 'Rejected';
     default:

@@ -1073,6 +1073,55 @@ export class MerchantsService {
     }
   }
 
+  async creditBackAfterBankFailure(
+    userId: string,
+    amount: number,
+  ): Promise<void> {
+    const ledger = await this.getLedgerByUserId(userId);
+
+    if (!ledger) {
+      return;
+    }
+
+    if (ledger.balanceMode === 'real') {
+      const nextReal = Number((ledger.realBalance + amount).toFixed(2));
+      const { error } = await this.supabaseService
+        .getAdminClient()
+        .from('merchants')
+        .update({
+          real_balance: nextReal,
+          available_balance: Number(
+            Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2),
+          ),
+        })
+        .eq('user_id', userId);
+
+      if (error) {
+        throw new InternalServerErrorException(
+          'Failed to credit merchant after bank rejection',
+        );
+      }
+
+      return;
+    }
+
+    const nextDemo = Number((ledger.demoBalance + amount).toFixed(2));
+    const { error } = await this.supabaseService
+      .getAdminClient()
+      .from('merchants')
+      .update({
+        demo_balance: nextDemo,
+        available_balance: nextDemo,
+      })
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new InternalServerErrorException(
+        'Failed to credit merchant after bank rejection',
+      );
+    }
+  }
+
   async updateRealBalanceByUserId(
     userId: string,
     realBalance: number,

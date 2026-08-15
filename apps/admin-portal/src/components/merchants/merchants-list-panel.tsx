@@ -101,6 +101,8 @@ export function MerchantsListPanel() {
   const [companyBankBalance, setCompanyBankBalance] = useState<number | null>(
     null,
   );
+  const [companyBankHold, setCompanyBankHold] = useState<number | null>(null);
+  const [companyBankLien, setCompanyBankLien] = useState<number | null>(null);
   const [companyBankError, setCompanyBankError] = useState<string | null>(null);
   const [companyBankLoading, setCompanyBankLoading] = useState(true);
   const [editingDemoId, setEditingDemoId] = useState<string | null>(null);
@@ -133,13 +135,19 @@ export function MerchantsListPanel() {
         );
       }
 
-      const nextBank = Number(bankData.bank_balance);
+      const nextBank = Number(
+        bankData.available_balance ?? bankData.bank_balance,
+      );
 
       if (!Number.isFinite(nextBank)) {
         throw new Error('Company bank balance response was not a number');
       }
 
       setCompanyBankBalance(nextBank);
+      const hold = Number(bankData.hold_amount);
+      const lien = Number(bankData.lien_amount);
+      setCompanyBankHold(Number.isFinite(hold) ? hold : null);
+      setCompanyBankLien(Number.isFinite(lien) ? lien : null);
     } catch (bankError) {
       setCompanyBankBalance(null);
       setCompanyBankError(
@@ -572,7 +580,17 @@ export function MerchantsListPanel() {
             <p className="mt-1 text-[11px] text-muted-foreground">
               {companyBankError
                 ? companyBankError
-                : 'HDFC current account · admin only'}
+                : [
+                    'HDFC current account · admin only',
+                    companyBankHold != null
+                      ? `Hold ${formatCurrency(companyBankHold)}`
+                      : null,
+                    companyBankLien != null
+                      ? `Lien ${formatCurrency(companyBankLien)}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
             </p>
           </GlassCardContent>
         </GlassCard>

@@ -22,6 +22,7 @@ import {
   ResetManagedPasswordDto,
   UpdateDemoBalanceDto,
   UpdateBalanceModeDto,
+  UpdateApprovalModeDto,
   UpdateAccountStatusDto,
   UpdateManagedUsernameDto,
 } from './dto/managed-user.dto';
@@ -104,6 +105,14 @@ export class AdminUsersController {
     @Body() dto: UpdateBalanceModeDto,
   ) {
     return this.adminUsersService.updateBalanceMode(id, dto.balance_mode);
+  }
+
+  @Patch(':id/approval-mode')
+  updateApprovalMode(
+    @Param('id') id: string,
+    @Body() dto: UpdateApprovalModeDto,
+  ) {
+    return this.adminUsersService.updateApprovalMode(id, dto.approval_mode);
   }
 
   @Patch(':id/account-status')

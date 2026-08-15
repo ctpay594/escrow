@@ -11,6 +11,7 @@ import type {
   AdminMerchantListItem,
   CreateMerchantInput,
   MerchantAccountStatus,
+  MerchantApprovalMode,
   MerchantProfileRow,
   PublicDeposit,
   PublicMerchantProfile,
@@ -305,14 +306,26 @@ export class MerchantsService {
 
     if (userIds.length > 0) {
       const fullSelect =
-        'user_id, merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, real_balance, demo_balance, balance_mode, account_status';
+        'user_id, merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, real_balance, demo_balance, balance_mode, approval_mode, account_status, escrow_account_details';
+      const withoutApprovalSelect =
+        'user_id, merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, real_balance, demo_balance, balance_mode, account_status, escrow_account_details';
       const basicSelect =
-        'user_id, merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance';
+        'user_id, merchant_name, user_ref, virtual_account_no, escrow_ifsc, available_balance, pending_balance, escrow_account_details';
 
       let merchantsQuery = await client
         .from('merchants')
         .select(fullSelect)
         .in('user_id', userIds);
+
+      if (
+        merchantsQuery.error &&
+        this.isMissingColumnError(merchantsQuery.error.message, 'approval_mode')
+      ) {
+        merchantsQuery = (await client
+          .from('merchants')
+          .select(withoutApprovalSelect)
+          .in('user_id', userIds)) as typeof merchantsQuery;
+      }
 
       if (
         merchantsQuery.error &&
@@ -370,6 +383,7 @@ export class MerchantsService {
         demo_balance: demoBalance,
         pending_balance: pendingBalance,
         balance_mode: balanceMode,
+        approval_mode: this.readApprovalMode(merchant ?? {}),
         account_status: accountStatus,
         created_at: row.created_at as string,
         updated_at: row.updated_at as string,
@@ -463,6 +477,10 @@ export class MerchantsService {
     );
   }
 
+  private isMissingColumnError(message: string, column: string): boolean {
+    return message.toLowerCase().includes(column.toLowerCase());
+  }
+
   private isMissingBalanceColumnError(message: string): boolean {
     const normalized = message.toLowerCase();
 
@@ -470,8 +488,44 @@ export class MerchantsService {
       normalized.includes('real_balance') ||
       normalized.includes('demo_balance') ||
       normalized.includes('balance_mode') ||
-      normalized.includes('account_status')
+      normalized.includes('account_status') ||
+      normalized.includes('approval_mode')
     );
+  }
+
+  private readApprovalMode(row: {
+    approval_mode?: unknown;
+    escrow_account_details?: unknown;
+  }): MerchantApprovalMode {
+    if (row.approval_mode === 'auto' || row.approval_mode === 'manual') {
+      return row.approval_mode;
+    }
+
+    if (
+      typeof row.escrow_account_details === 'object' &&
+      row.escrow_account_details !== null &&
+      (row.escrow_account_details as { approval_mode?: unknown })
+        .approval_mode === 'auto'
+    ) {
+      return 'auto';
+    }
+
+    return 'manual';
+  }
+
+  private mergeApprovalModeIntoDetails(
+    details: unknown,
+    approvalMode: MerchantApprovalMode,
+  ): Record<string, unknown> {
+    const base =
+      typeof details === 'object' && details !== null
+        ? { ...(details as Record<string, unknown>) }
+        : {};
+
+    return {
+      ...base,
+      approval_mode: approvalMode,
+    };
   }
 
   private migrationRequiredMessage(): string {
@@ -698,6 +752,57 @@ export class MerchantsService {
     };
   }
 
+  async updateApprovalModeByUserId(
+    userId: string,
+    approvalMode: MerchantApprovalMode,
+  ): Promise<{ approvalMode: MerchantApprovalMode }> {
+    const data = await this.loadMerchantBalanceRow(userId);
+
+    if (!data) {
+      throw new NotFoundException('Merchant not found');
+    }
+
+    const { error: updateError } = await this.supabaseService
+      .getAdminClient()
+      .from('merchants')
+      .update({ approval_mode: approvalMode })
+      .eq('user_id', userId);
+
+    if (
+      updateError &&
+      this.isMissingColumnError(updateError.message, 'approval_mode')
+    ) {
+      const { error: fallbackError } = await this.supabaseService
+        .getAdminClient()
+        .from('merchants')
+        .update({
+          escrow_account_details: this.mergeApprovalModeIntoDetails(
+            data.escrow_account_details,
+            approvalMode,
+          ),
+        })
+        .eq('user_id', userId);
+
+      if (fallbackError) {
+        throw new InternalServerErrorException(
+          'Failed to update approval mode',
+        );
+      }
+
+      return { approvalMode };
+    }
+
+    if (updateError) {
+      throw new InternalServerErrorException(
+        this.isMissingBalanceColumnError(updateError.message)
+          ? this.migrationRequiredMessage()
+          : 'Failed to update approval mode',
+      );
+    }
+
+    return { approvalMode };
+  }
+
   async updateAccountStatusByUserId(
     userId: string,
     accountStatus: MerchantAccountStatus,
@@ -750,19 +855,32 @@ export class MerchantsService {
     merchantName: string;
     userRef: string | null;
     balanceMode: 'real' | 'demo';
+    approvalMode: MerchantApprovalMode;
     realBalance: number;
     demoBalance: number;
     pendingBalance: number;
     spendable: number;
   } | null> {
-    const { data, error } = await this.supabaseService
+    const fullSelect =
+      'id, merchant_name, user_ref, real_balance, demo_balance, pending_balance, balance_mode, approval_mode, escrow_account_details';
+    const fallbackSelect =
+      'id, merchant_name, user_ref, real_balance, demo_balance, pending_balance, balance_mode, escrow_account_details';
+
+    let { data, error } = await this.supabaseService
       .getAdminClient()
       .from('merchants')
-      .select(
-        'id, merchant_name, user_ref, real_balance, demo_balance, pending_balance, balance_mode',
-      )
+      .select(fullSelect)
       .eq('user_id', userId)
       .maybeSingle();
+
+    if (error && this.isMissingColumnError(error.message, 'approval_mode')) {
+      ({ data, error } = await this.supabaseService
+        .getAdminClient()
+        .from('merchants')
+        .select(fallbackSelect)
+        .eq('user_id', userId)
+        .maybeSingle());
+    }
 
     if (error) {
       throw new InternalServerErrorException('Failed to load merchant ledger');
@@ -782,6 +900,7 @@ export class MerchantsService {
       merchantName: data.merchant_name as string,
       userRef: (data.user_ref as string | null) ?? null,
       balanceMode,
+      approvalMode: this.readApprovalMode(data),
       realBalance,
       demoBalance,
       pendingBalance,

@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { EscrowStackService } from '../escrowstack';
 import type { PayoutItem } from '../escrowstack/escrowstack.types';
@@ -11,6 +13,7 @@ import { MerchantsService } from '../merchants';
 import { SupabaseService } from '../supabase';
 import { UsersService } from '../users';
 import { generatePayoutRef } from './payout-ref.util';
+import { TransferReconcileService } from './transfer-reconcile.service';
 import type {
   AdminTransferListItem,
   ApproveBatchResult,
@@ -39,6 +42,8 @@ export class TransfersService {
     private readonly merchantsService: MerchantsService,
     private readonly escrowStackService: EscrowStackService,
     private readonly usersService: UsersService,
+    @Inject(forwardRef(() => TransferReconcileService))
+    private readonly transferReconcileService: TransferReconcileService,
   ) {}
 
   async createTransfer(input: CreateTransferInput): Promise<PublicTransfer> {
@@ -104,8 +109,9 @@ export class TransfersService {
       );
     }
 
-    return this.toPublicTransfer(
-      await this.fetchTransferRowById((data as TransferRecord).id),
+    return this.dispatchCreatedTransfer(
+      (data as TransferRecord).id,
+      ledger.approvalMode,
     );
   }
 
@@ -239,7 +245,7 @@ export class TransfersService {
       throw error;
     }
 
-    return {
+    const created = {
       batch: {
         id: batchId,
         label: (batchRow.label as string | null) ?? null,
@@ -251,6 +257,43 @@ export class TransfersService {
       total_amount: totalAmount,
       transfer_count: items.length,
     };
+
+    if (ledger.approvalMode !== 'auto') {
+      return created;
+    }
+
+    try {
+      const approval = await this.approveBatch(batchId);
+
+      if (approval.approved > 0) {
+        this.transferReconcileService.scheduleReconcile();
+      }
+
+      if (approval.failed.length > 0) {
+        this.logger.warn(
+          `Auto-approve batch ${batchId}: ${approval.approved} sent, ${approval.failed.length} still pending`,
+        );
+      }
+
+      const approvedById = new Map(
+        approval.transfers.map((transfer) => [transfer.id, transfer]),
+      );
+
+      return {
+        ...created,
+        transfers: createdTransfers.map(
+          (transfer) => approvedById.get(transfer.id) ?? transfer,
+        ),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Auto-approve batch ${batchId} failed: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+
+      return created;
+    }
   }
 
   async approveBatch(batchId: string): Promise<ApproveBatchResult> {
@@ -411,6 +454,29 @@ export class TransfersService {
     }
 
     return this.toPublicTransfer(await this.fetchTransferRowById(transferId));
+  }
+
+  private async dispatchCreatedTransfer(
+    transferId: string,
+    approvalMode: 'auto' | 'manual',
+  ): Promise<PublicTransfer> {
+    if (approvalMode !== 'auto') {
+      return this.toPublicTransfer(await this.fetchTransferRowById(transferId));
+    }
+
+    try {
+      const transfer = await this.approveTransfer(transferId);
+      this.transferReconcileService.scheduleReconcile();
+      return transfer;
+    } catch (error) {
+      this.logger.error(
+        `Auto-approve failed for transfer ${transferId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+
+      return this.toPublicTransfer(await this.fetchTransferRowById(transferId));
+    }
   }
 
   async reconcileAllProcessingTransfers(): Promise<ReconcileTransfersResult> {

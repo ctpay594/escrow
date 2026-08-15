@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit, forwardRef } from '@nestjs/common';
 import { TransfersService } from './transfers.service';
 
 const RECONCILE_DELAYS_MS = [
@@ -15,7 +15,10 @@ export class TransferReconcileService implements OnModuleInit, OnModuleDestroy {
   private activeLoop = false;
   private shouldRunAgain = false;
 
-  constructor(private readonly transfersService: TransfersService) {}
+  constructor(
+    @Inject(forwardRef(() => TransfersService))
+    private readonly transfersService: TransfersService,
+  ) {}
 
   onModuleInit(): void {
     this.sweepTimer = setTimeout(() => {

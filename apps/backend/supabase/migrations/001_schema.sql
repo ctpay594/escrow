@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS public.merchants (
   real_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
   demo_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
   balance_mode TEXT NOT NULL DEFAULT 'demo',
+  approval_mode TEXT NOT NULL DEFAULT 'manual',
   account_status TEXT NOT NULL DEFAULT 'active',
   escrow_account_details JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -91,6 +92,7 @@ ALTER TABLE public.merchants
   ADD COLUMN IF NOT EXISTS real_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS demo_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS balance_mode TEXT NOT NULL DEFAULT 'demo',
+  ADD COLUMN IF NOT EXISTS approval_mode TEXT NOT NULL DEFAULT 'manual',
   ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'active',
   ADD COLUMN IF NOT EXISTS escrow_account_details JSONB;
 
@@ -108,6 +110,7 @@ WHERE real_balance = 0 AND demo_balance = 0 AND available_balance <> 0;
 UPDATE public.merchants
 SET
   balance_mode = COALESCE(balance_mode, 'demo'),
+  approval_mode = COALESCE(approval_mode, 'manual'),
   account_status = COALESCE(account_status, 'active');
 
 ALTER TABLE public.merchants DROP CONSTRAINT IF EXISTS merchants_balance_mode_check;
@@ -119,6 +122,11 @@ ALTER TABLE public.merchants DROP CONSTRAINT IF EXISTS merchants_account_status_
 ALTER TABLE public.merchants
   ADD CONSTRAINT merchants_account_status_check
   CHECK (account_status IN ('active', 'on_hold', 'terminated'));
+
+ALTER TABLE public.merchants DROP CONSTRAINT IF EXISTS merchants_approval_mode_check;
+ALTER TABLE public.merchants
+  ADD CONSTRAINT merchants_approval_mode_check
+  CHECK (approval_mode IN ('auto', 'manual'));
 
 CREATE INDEX IF NOT EXISTS merchants_user_id_idx ON public.merchants (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS merchants_virtual_account_no_unique

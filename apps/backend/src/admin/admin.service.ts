@@ -146,6 +146,18 @@ export class AdminUsersService {
     };
   }
 
+  async updateApprovalMode(id: string, approvalMode: 'auto' | 'manual') {
+    const result = await this.merchantsService.updateApprovalModeByUserId(
+      id,
+      approvalMode,
+    );
+
+    return {
+      approval_mode: result.approvalMode,
+      message: 'Approval mode updated',
+    };
+  }
+
   async updateAccountStatus(
     id: string,
     accountStatus: 'active' | 'on_hold' | 'terminated',

@@ -16,6 +16,8 @@ export interface MerchantRecord {
 
 export type MerchantAccountStatus = 'active' | 'on_hold' | 'terminated';
 
+export type MerchantApprovalMode = 'auto' | 'manual';
+
 export interface PublicMerchantProfile {
   merchant_name: string;
   user_ref: string | null;
@@ -50,6 +52,7 @@ export interface AdminMerchantListItem {
   demo_balance: number;
   pending_balance: number;
   balance_mode: 'real' | 'demo';
+  approval_mode: MerchantApprovalMode;
   account_status: MerchantAccountStatus;
   created_at: string;
   updated_at: string;

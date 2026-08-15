@@ -49,6 +49,11 @@ export class UpdateBalanceModeDto {
   balance_mode!: 'real' | 'demo';
 }
 
+export class UpdateApprovalModeDto {
+  @IsIn(['auto', 'manual'])
+  approval_mode!: 'auto' | 'manual';
+}
+
 export class UpdateAccountStatusDto {
   @IsIn(['active', 'on_hold', 'terminated'])
   account_status!: 'active' | 'on_hold' | 'terminated';

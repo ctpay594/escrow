@@ -4,6 +4,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronRight, Pencil, Plus, RefreshCw, Search, Users } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import type { ApprovalMode } from '@/components/merchants/approval-mode-toggle';
+import { ApprovalModeToggle } from '@/components/merchants/approval-mode-toggle';
 import type { BalanceMode } from '@/components/merchants/balance-mode-toggle';
 import { BalanceModeToggle } from '@/components/merchants/balance-mode-toggle';
 import {
@@ -25,6 +27,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { formatCurrency } from '@/lib/format';
 import { glassInset, glassTableHead, glassTableRow } from '@/lib/glass-styles';
 import { updateMerchantBalanceMode } from '@/lib/merchant-balance';
+import { updateMerchantApprovalMode } from '@/lib/merchant-approval';
 import { cn } from '@/lib/utils';
 import { UserPortalLiveLink } from '@/components/user-portal-live-link';
 
@@ -39,6 +42,7 @@ interface ManagedMerchant {
   demo_balance: number;
   pending_balance: number;
   balance_mode: BalanceMode;
+  approval_mode: ApprovalMode;
   account_status?: 'active' | 'on_hold' | 'terminated';
 }
 
@@ -103,6 +107,9 @@ export function MerchantsListPanel() {
   const [demoDraft, setDemoDraft] = useState('');
   const [savingDemoId, setSavingDemoId] = useState<string | null>(null);
   const [updatingModeId, setUpdatingModeId] = useState<string | null>(null);
+  const [updatingApprovalId, setUpdatingApprovalId] = useState<string | null>(
+    null,
+  );
 
   const loadCompanyBankBalance = useCallback(async () => {
     setCompanyBankLoading(true);
@@ -172,6 +179,7 @@ export function MerchantsListPanel() {
         list.map((merchant) => ({
           ...merchant,
           balance_mode: merchant.balance_mode ?? 'demo',
+          approval_mode: merchant.approval_mode ?? 'manual',
         })),
       );
 
@@ -290,6 +298,45 @@ export function MerchantsListPanel() {
       );
     } finally {
       setUpdatingModeId(null);
+    }
+  }
+
+  async function changeMerchantApprovalMode(
+    merchant: ManagedMerchant,
+    approvalMode: ApprovalMode,
+  ) {
+    if (merchant.approval_mode === approvalMode) {
+      return;
+    }
+
+    setUpdatingApprovalId(merchant.id);
+
+    try {
+      await updateMerchantApprovalMode(merchant.id, approvalMode);
+
+      setMerchants((current) =>
+        current.map((row) =>
+          row.id === merchant.id
+            ? {
+                ...row,
+                approval_mode: approvalMode,
+              }
+            : row,
+        ),
+      );
+      toast.success(
+        approvalMode === 'auto'
+          ? `${merchant.merchant_name}: payouts auto-sent to bank`
+          : `${merchant.merchant_name}: payouts need approval`,
+      );
+    } catch (approvalError) {
+      toast.error(
+        approvalError instanceof Error
+          ? approvalError.message
+          : 'Failed to update approval mode',
+      );
+    } finally {
+      setUpdatingApprovalId(null);
     }
   }
 
@@ -752,6 +799,7 @@ export function MerchantsListPanel() {
                     <th className="px-4 py-3 text-right">Demo (portal)</th>
                     <th className="px-4 py-3 text-right">Pending</th>
                     <th className="px-4 py-3 text-center">Portal</th>
+                    <th className="px-4 py-3 text-center">Payouts</th>
                     <th className="w-36 px-5 py-3 text-right" aria-hidden />
                   </tr>
                 </thead>
@@ -761,6 +809,8 @@ export function MerchantsListPanel() {
                     const isEditingDemo = editingDemoId === merchant.id;
                     const isSavingDemo = savingDemoId === merchant.id;
                     const isUpdatingMode = updatingModeId === merchant.id;
+                    const isUpdatingApproval =
+                      updatingApprovalId === merchant.id;
                     const usesReal = merchant.balance_mode === 'real';
 
                     return (
@@ -894,6 +944,18 @@ export function MerchantsListPanel() {
                             disabled={isUpdatingMode}
                             onChange={(mode) =>
                               void changeMerchantBalanceMode(merchant, mode)
+                            }
+                          />
+                        </td>
+                        <td
+                          className="px-4 py-3.5 text-center"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <ApprovalModeToggle
+                            value={merchant.approval_mode ?? 'manual'}
+                            disabled={isUpdatingApproval}
+                            onChange={(mode) =>
+                              void changeMerchantApprovalMode(merchant, mode)
                             }
                           />
                         </td>

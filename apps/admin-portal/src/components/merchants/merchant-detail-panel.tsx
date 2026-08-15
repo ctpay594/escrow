@@ -10,6 +10,10 @@ import {
   type MerchantAccountStatus,
 } from '@/components/merchants/account-status-toggle';
 import {
+  ApprovalModeToggle,
+  type ApprovalMode,
+} from '@/components/merchants/approval-mode-toggle';
+import {
   BalanceModeToggle,
   type BalanceMode,
 } from '@/components/merchants/balance-mode-toggle';
@@ -33,6 +37,7 @@ import { formatCurrency } from '@/lib/format';
 import { glassInset } from '@/lib/glass-styles';
 import { cn } from '@/lib/utils';
 import { updateMerchantBalanceMode } from '@/lib/merchant-balance';
+import { updateMerchantApprovalMode } from '@/lib/merchant-approval';
 import { updateMerchantAccountStatus } from '@/lib/merchant-account-status';
 
 interface ManagedMerchant {
@@ -47,6 +52,7 @@ interface ManagedMerchant {
   available_balance: number;
   pending_balance: number;
   balance_mode: BalanceMode;
+  approval_mode: ApprovalMode;
   account_status: MerchantAccountStatus;
   created_at?: string;
 }
@@ -70,6 +76,7 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isUpdatingMode, setIsUpdatingMode] = useState(false);
+  const [isUpdatingApproval, setIsUpdatingApproval] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [editUsername, setEditUsername] = useState(false);
@@ -113,6 +120,7 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
       const normalized = {
         ...found,
         balance_mode: found.balance_mode ?? 'demo',
+        approval_mode: found.approval_mode ?? 'manual',
         account_status: found.account_status ?? 'active',
         created_at: found.created_at,
       };
@@ -187,6 +195,51 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
           );
         } finally {
           setIsUpdatingMode(false);
+        }
+      },
+    );
+  }
+
+  async function changeApprovalMode(approvalMode: ApprovalMode) {
+    if (!merchant || merchant.approval_mode === approvalMode) {
+      return;
+    }
+
+    askConfirmation(
+      {
+        title:
+          approvalMode === 'auto'
+            ? 'Turn on auto payouts?'
+            : 'Switch payouts back to manual approval?',
+        description:
+          approvalMode === 'auto'
+            ? `${merchant.merchant_name}'s single and batch transfers will be sent to the bank immediately, without waiting in the approval queue.`
+            : `${merchant.merchant_name}'s transfers will wait for admin approval before they are sent to the bank.`,
+        confirmLabel: approvalMode === 'auto' ? 'Yes, enable auto' : 'Yes, use manual',
+        destructive: approvalMode === 'auto',
+      },
+      async () => {
+        setIsUpdatingApproval(true);
+
+        try {
+          await updateMerchantApprovalMode(merchant.id, approvalMode);
+
+          setMerchant((current) =>
+            current ? { ...current, approval_mode: approvalMode } : current,
+          );
+          toast.success(
+            approvalMode === 'auto'
+              ? 'New payouts will go to the bank automatically'
+              : 'New payouts will wait for approval',
+          );
+        } catch (approvalError) {
+          toast.error(
+            approvalError instanceof Error
+              ? approvalError.message
+              : 'Failed to update approval mode',
+          );
+        } finally {
+          setIsUpdatingApproval(false);
         }
       },
     );
@@ -427,6 +480,14 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
                 value={merchant.balance_mode}
                 disabled={isUpdatingMode}
                 onChange={(mode) => void changeBalanceMode(mode)}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs text-muted-foreground">Payouts</span>
+              <ApprovalModeToggle
+                value={merchant.approval_mode}
+                disabled={isUpdatingApproval}
+                onChange={(mode) => void changeApprovalMode(mode)}
               />
             </div>
           </div>

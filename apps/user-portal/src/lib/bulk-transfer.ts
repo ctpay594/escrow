@@ -10,6 +10,7 @@ export interface BulkTransferRow {
   beneficiary_ifsc: string;
   payout_mode: BankPayoutMode;
   amount: number;
+  nameWarning?: boolean;
   accountWarning?: boolean;
   ifscWarning?: boolean;
   modeWarning?: boolean;
@@ -37,11 +38,29 @@ const SAMPLE_DATA = [
   ['Amit Verma', '112233445566', 'SBIN0001234', 'RTGS', 210000],
 ];
 
+type CanonicalField =
+  | 'beneficiary_name'
+  | 'account_number'
+  | 'ifsc'
+  | 'payout_mode'
+  | 'amount_inr';
+
+const CANONICAL_FIELDS: CanonicalField[] = [
+  'beneficiary_name',
+  'account_number',
+  'ifsc',
+  'payout_mode',
+  'amount_inr',
+];
+
 const ACCOUNT_HEADER_KEYS = [
   'account_number',
   'account_no',
   'beneficiary_account_no',
   'account',
+  'acc_no',
+  'ac_no',
+  'a_c_no',
 ];
 
 function normalizeHeader(value: unknown) {
@@ -50,6 +69,63 @@ function normalizeHeader(value: unknown) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+}
+
+function headerField(header: string): CanonicalField | null {
+  const h = header.trim();
+  if (!h || h.startsWith('_col_')) {
+    return null;
+  }
+
+  if (h.includes('ifsc')) {
+    return 'ifsc';
+  }
+
+  if (
+    h.includes('amount') ||
+    h === 'inr' ||
+    h.includes('rupee') ||
+    h === 'rs' ||
+    h === 'inr_amount'
+  ) {
+    return 'amount_inr';
+  }
+
+  if (
+    h.includes('payout') ||
+    h.includes('mode') ||
+    h === 'imps' ||
+    h === 'neft' ||
+    h === 'rtgs'
+  ) {
+    return 'payout_mode';
+  }
+
+  if (
+    h.includes('account_no') ||
+    h.includes('account_number') ||
+    h.includes('acc_no') ||
+    h.includes('ac_no') ||
+    h === 'a_c_no' ||
+    h === 'a_c' ||
+    h === 'acc' ||
+    h === 'account' ||
+    (h.includes('account') && !h.includes('name'))
+  ) {
+    return 'account_number';
+  }
+
+  if (
+    h.includes('name') ||
+    h.includes('beneficiary') ||
+    h.includes('payee') ||
+    h.includes('customer') ||
+    h.includes('holder')
+  ) {
+    return 'beneficiary_name';
+  }
+
+  return null;
 }
 
 function pickValue(row: Record<string, unknown>, keys: string[]) {
@@ -175,32 +251,258 @@ function readCellValue(cell?: XLSX.CellObject): unknown {
   return cell.v ?? '';
 }
 
-function isAccountHeader(header: string) {
-  return ACCOUNT_HEADER_KEYS.some(
-    (key) => header === key || header.includes('account'),
-  );
+function scoreCellForField(value: unknown, field: CanonicalField): number {
+  const text = String(value ?? '').trim();
+  if (!text) {
+    return 0;
+  }
+
+  const upper = text.toUpperCase();
+  const { digits } = parseRawAccountDigits(text);
+
+  if (field === 'ifsc') {
+    return isIfscValid(upper) ? 5 : 0;
+  }
+
+  if (field === 'payout_mode') {
+    return parsePayoutMode(text) ? 5 : 0;
+  }
+
+  if (field === 'account_number') {
+    if (/^\d{9,18}$/.test(digits) && !isIfscValid(upper)) {
+      return 5;
+    }
+
+    return 0;
+  }
+
+  if (field === 'amount_inr') {
+    const amount = normalizeAmount(value);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return 0;
+    }
+
+    if (/[₹,]/.test(text) || /\.\d{1,2}$/.test(text)) {
+      return 5;
+    }
+
+    if (/^\d{1,8}$/.test(digits)) {
+      return 4;
+    }
+
+    return 0;
+  }
+
+  if (isIfscValid(upper) || parsePayoutMode(text) || /^\d+$/.test(text.replace(/\s/g, ''))) {
+    return 0;
+  }
+
+  if (/[a-zA-Z]/.test(text) && text.replace(/[^a-zA-Z]/g, '').length >= 2) {
+    return 4;
+  }
+
+  return 0;
 }
 
-function parseSheetXmlRawValues(xml: string): Map<string, string> {
+function firstRowLooksLikeHeaders(values: unknown[]): boolean {
+  const headers = values
+    .map((value) => normalizeHeader(value))
+    .filter((header) => header.length > 0);
+  const mapped = headers.filter((header) => headerField(header)).length;
+
+  if (mapped >= 2) {
+    return true;
+  }
+
+  return values.some((value) => {
+    const text = String(value ?? '').trim();
+    if (!text) {
+      return false;
+    }
+
+    const { digits } = parseRawAccountDigits(text);
+    return isIfscValid(text) || /^\d{9,18}$/.test(digits);
+  })
+    ? false
+    : headers.length > 0;
+}
+
+function inferFieldByKey(
+  rawRows: Record<string, unknown>[],
+): Map<string, CanonicalField> {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rawRows) {
+    for (const key of Object.keys(row)) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+  }
+
+  const assigned = new Map<string, CanonicalField>();
+  const used = new Set<CanonicalField>();
+
+  for (const key of keys) {
+    const field = headerField(key);
+    if (field && !used.has(field)) {
+      assigned.set(key, field);
+      used.add(field);
+    }
+  }
+
+  for (const field of CANONICAL_FIELDS) {
+    if (used.has(field)) {
+      continue;
+    }
+
+    let bestKey: string | null = null;
+    let bestScore = 0;
+
+    for (const key of keys) {
+      if (assigned.has(key)) {
+        continue;
+      }
+
+      let score = 0;
+      for (const row of rawRows) {
+        score += scoreCellForField(row[key], field);
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestKey = key;
+      }
+    }
+
+    if (bestKey && bestScore > 0) {
+      assigned.set(bestKey, field);
+      used.add(field);
+    }
+  }
+
+  return assigned;
+}
+
+function extractFieldsFromCells(values: unknown[]): Record<string, unknown> {
+  const remaining = values.filter((value) => String(value ?? '').trim() !== '');
+  const mapped: Record<string, unknown> = {};
+  const order: CanonicalField[] = [
+    'ifsc',
+    'payout_mode',
+    'account_number',
+    'amount_inr',
+    'beneficiary_name',
+  ];
+
+  for (const field of order) {
+    let bestIndex = -1;
+    let bestScore = 0;
+
+    remaining.forEach((value, index) => {
+      const score = scoreCellForField(value, field);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+
+    if (bestIndex >= 0) {
+      mapped[field] = remaining.splice(bestIndex, 1)[0];
+    }
+  }
+
+  return mapped;
+}
+
+function remapRowsToCanonical(
+  rawRows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const fieldByKey = inferFieldByKey(rawRows);
+
+  return rawRows.map((row) => {
+    const fromColumns: Record<string, unknown> = {};
+
+    for (const [key, field] of fieldByKey) {
+      const value = row[key];
+      if (scoreCellForField(value, field) > 0) {
+        fromColumns[field] = value;
+      }
+    }
+
+    const inferred = extractFieldsFromCells(Object.values(row));
+    const mapped: Record<string, unknown> = {};
+
+    for (const field of CANONICAL_FIELDS) {
+      mapped[field] = fromColumns[field] ?? inferred[field] ?? '';
+    }
+
+    return mapped;
+  });
+}
+
+function decodeXmlText(value: string) {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function parseSharedStrings(xml: string): string[] {
+  const values: string[] = [];
+  const siRegex = /<si\b[^>]*>([\s\S]*?)<\/si>/g;
+
+  for (const match of xml.matchAll(siRegex)) {
+    const inner = match[1] ?? '';
+    const parts = [...inner.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((part) =>
+      decodeXmlText(part[1] ?? ''),
+    );
+    values.push(parts.join(''));
+  }
+
+  return values;
+}
+
+function parseSheetXmlRawValues(
+  xml: string,
+  sharedStrings: string[],
+): Map<string, string> {
   const map = new Map<string, string>();
-  const cellRegex = /<c\b[^>]*\br="([A-Z]+\d+)"[^>]*>([\s\S]*?)<\/c>/g;
+  const cellRegex = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
 
   for (const match of xml.matchAll(cellRegex)) {
-    const ref = match[1];
-    const inner = match[2];
-    if (!ref || inner === undefined) {
+    const attrs = match[1] ?? '';
+    const inner = match[2] ?? '';
+    const ref = attrs.match(/\br="([A-Z]+\d+)"/)?.[1];
+    if (!ref) {
+      continue;
+    }
+
+    const type = attrs.match(/\bt="([^"]+)"/)?.[1];
+
+    if (type === 's') {
+      const index = Number.parseInt(inner.match(/<v>([^<]*)<\/v>/)?.[1] ?? '', 10);
+      if (Number.isInteger(index) && sharedStrings[index] !== undefined) {
+        map.set(ref, sharedStrings[index]);
+      }
+      continue;
+    }
+
+    const inlineText = [...inner.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)]
+      .map((part) => decodeXmlText(part[1] ?? ''))
+      .join('');
+    if (inlineText) {
+      map.set(ref, inlineText);
       continue;
     }
 
     const vMatch = inner.match(/<v>([^<]*)<\/v>/);
     if (vMatch?.[1] !== undefined) {
-      map.set(ref, vMatch[1]);
-      continue;
-    }
-
-    const inlineText = inner.match(/<is>\s*<t(?:\s+[^>]*)?>([^<]*)<\/t>/);
-    if (inlineText?.[1] !== undefined) {
-      map.set(ref, inlineText[1]);
+      map.set(ref, decodeXmlText(vMatch[1]));
     }
   }
 
@@ -210,6 +512,10 @@ function parseSheetXmlRawValues(xml: string): Map<string, string> {
 async function loadRawXlsxCellMap(buffer: ArrayBuffer): Promise<Map<string, string>> {
   try {
     const zip = await JSZip.loadAsync(buffer);
+    const sharedStringsFile = zip.file('xl/sharedStrings.xml');
+    const sharedStrings = sharedStringsFile
+      ? parseSharedStrings(await sharedStringsFile.async('text'))
+      : [];
     const sheetPaths = Object.keys(zip.files)
       .filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path))
       .sort();
@@ -224,10 +530,34 @@ async function loadRawXlsxCellMap(buffer: ArrayBuffer): Promise<Map<string, stri
       return new Map();
     }
 
-    return parseSheetXmlRawValues(xml);
+    return parseSheetXmlRawValues(xml, sharedStrings);
   } catch {
     return new Map();
   }
+}
+
+function readSheetRowValues(
+  sheet: XLSX.WorkSheet,
+  range: XLSX.Range,
+  rowIndex: number,
+  rawCells?: Map<string, string>,
+): unknown[] {
+  const values: unknown[] = [];
+
+  for (let column = range.s.c; column <= range.e.c; column += 1) {
+    const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: column });
+    const parsedValue = readCellValue(sheet[cellRef]);
+    const raw = rawCells?.get(cellRef);
+
+    if (raw !== undefined && String(raw).trim() !== '') {
+      values.push(raw);
+      continue;
+    }
+
+    values.push(parsedValue);
+  }
+
+  return values;
 }
 
 function sheetToNormalizedRows(
@@ -241,44 +571,26 @@ function sheetToNormalizedRows(
   }
 
   const range = XLSX.utils.decode_range(ref);
-  const headers: string[] = [];
-  let accountColIndex = -1;
-
-  for (let column = range.s.c; column <= range.e.c; column += 1) {
-    const headerCell = sheet[XLSX.utils.encode_cell({ r: range.s.r, c: column })];
-    const header = normalizeHeader(readCellValue(headerCell));
-    headers.push(header);
-
-    if (accountColIndex < 0 && isAccountHeader(header)) {
-      accountColIndex = column - range.s.c;
+  const firstValues = readSheetRowValues(sheet, range, range.s.r, rawCells);
+  const hasHeaderRow = firstRowLooksLikeHeaders(firstValues);
+  const headers = firstValues.map((value, index) => {
+    if (!hasHeaderRow) {
+      return `_col_${index}`;
     }
-  }
 
+    return normalizeHeader(value) || `_col_${index}`;
+  });
+  const dataStart = hasHeaderRow ? range.s.r + 1 : range.s.r;
   const rows: Record<string, unknown>[] = [];
 
-  for (let rowIndex = range.s.r + 1; rowIndex <= range.e.r; rowIndex += 1) {
+  for (let rowIndex = dataStart; rowIndex <= range.e.r; rowIndex += 1) {
+    const values = readSheetRowValues(sheet, range, rowIndex, rawCells);
     const row: Record<string, unknown> = {};
 
-    for (let column = range.s.c; column <= range.e.c; column += 1) {
-      const headerIndex = column - range.s.c;
-      const header = headers[headerIndex];
-      if (!header) {
-        continue;
-      }
-
-      const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: column });
-
-      if (rawCells && headerIndex === accountColIndex) {
-        const raw = rawCells.get(cellRef);
-        if (raw !== undefined) {
-          row[header] = raw;
-          continue;
-        }
-      }
-
-      const cell = sheet[cellRef];
-      row[header] = readCellValue(cell);
-    }
+    values.forEach((value, index) => {
+      const header = headers[index] ?? `_col_${index}`;
+      row[header] = value;
+    });
 
     rows.push(row);
   }
@@ -329,29 +641,23 @@ function parseDelimitedText(text: string, delimiter: string): Record<string, unk
     return [];
   }
 
-  const headerLine = lines[0] ?? '';
-  const headers = parseDelimitedLine(headerLine, delimiter).map((value) =>
-    normalizeHeader(value),
-  );
+  const firstValues = parseDelimitedLine(lines[0] ?? '', delimiter);
+  const hasHeaderRow = firstRowLooksLikeHeaders(firstValues);
+  const headers = firstValues.map((value, index) => {
+    if (!hasHeaderRow) {
+      return `_col_${index}`;
+    }
 
-  const accountColIndex = headers.findIndex((header) => isAccountHeader(header));
+    return normalizeHeader(value) || `_col_${index}`;
+  });
+  const dataLines = hasHeaderRow ? lines.slice(1) : lines;
 
-  return lines.slice(1).map((line) => {
+  return dataLines.map((line) => {
     const values = parseDelimitedLine(line, delimiter);
     const row: Record<string, unknown> = {};
 
     headers.forEach((header, index) => {
-      if (!header) {
-        return;
-      }
-
-      const raw = values[index] ?? '';
-      if (index === accountColIndex) {
-        row[header] = raw.trim();
-        return;
-      }
-
-      row[header] = raw.trim();
+      row[header] = (values[index] ?? '').trim();
     });
 
     return row;
@@ -364,8 +670,9 @@ function buildBulkRowsFromNormalized(
 ): ParsedBulkSheet {
   const rows: BulkTransferRow[] = [];
   const errors: ParsedBulkSheet['errors'] = [];
+  const mappedRows = remapRowsToCanonical(rawRows);
 
-  rawRows.forEach((normalized, index) => {
+  mappedRows.forEach((normalized, index) => {
     const rowNumber = startRowNumber + index;
 
     const beneficiaryName = String(
@@ -388,33 +695,38 @@ function buildBulkRowsFromNormalized(
       pickValue(normalized, ['amount_inr', 'amount', 'inr']),
     );
 
-    if (!beneficiaryName && !accountNo && !ifsc && !Number.isFinite(amount)) {
-      return;
-    }
-
     const payoutModeRaw = String(
       pickValue(normalized, ['payout_mode', 'mode', 'transfer_mode', 'payout']),
     );
+
+    if (
+      !beneficiaryName &&
+      !accountNo &&
+      !ifsc &&
+      !payoutModeRaw.trim() &&
+      !Number.isFinite(amount)
+    ) {
+      return;
+    }
+
     const payoutMode = parsePayoutMode(payoutModeRaw) ?? 'IMPS';
     const modeWarning = Boolean(payoutModeRaw.trim()) && !parsePayoutMode(payoutModeRaw);
-
+    const nameWarning = !beneficiaryName || beneficiaryName.length < 2;
     const accountValid = /^\d{9,18}$/.test(accountNo);
     const ifscValid = isIfscValid(ifsc);
     const amountValid = Number.isFinite(amount) && amount > 0;
     const precisionWarning = rawPrecisionWarning && accountValid;
     const warnings: string[] = [];
 
-    if (!beneficiaryName || beneficiaryName.length < 2) {
-      errors.push({
-        rowNumber,
-        message: 'Correct this: beneficiary name is missing or too short.',
-      });
-      return;
+    if (nameWarning) {
+      warnings.push('Beneficiary name is missing. Add the name.');
     }
 
     if (!accountValid) {
       warnings.push(
-        `Account number ${accountNo || '(blank)'} is wrong. Use 9–18 digits.`,
+        accountNo
+          ? `Account number ${accountNo} is wrong. Use 9–18 digits.`
+          : 'Account number is missing. Enter 9–18 digits.',
       );
     } else if (precisionWarning) {
       warnings.push(
@@ -424,7 +736,9 @@ function buildBulkRowsFromNormalized(
 
     if (!ifscValid) {
       warnings.push(
-        `IFSC ${ifsc || '(blank)'} is wrong. Use a valid code like HDFC0001234.`,
+        ifsc
+          ? `IFSC ${ifsc} is wrong. Use a valid code like HDFC0001234.`
+          : 'IFSC is missing. Enter a valid code like HDFC0001234.',
       );
     }
 
@@ -439,11 +753,7 @@ function buildBulkRowsFromNormalized(
     }
 
     if (!amountValid) {
-      errors.push({
-        rowNumber,
-        message: 'Correct this: amount is missing or invalid.',
-      });
-      return;
+      warnings.push('Amount is missing or invalid. Enter the transfer amount.');
     }
 
     rows.push({
@@ -452,7 +762,8 @@ function buildBulkRowsFromNormalized(
       beneficiary_account_no: accountNo,
       beneficiary_ifsc: ifsc,
       payout_mode: payoutMode,
-      amount: Number(amount.toFixed(2)),
+      amount: amountValid ? Number(amount.toFixed(2)) : 0,
+      nameWarning,
       accountWarning: !accountValid || precisionWarning,
       ifscWarning: !ifscValid,
       modeWarning,
@@ -545,11 +856,15 @@ export function bulkRowsTotal(rows: BulkTransferRow[]) {
 }
 
 export function bulkRowsHaveAccountWarnings(rows: BulkTransferRow[]) {
-  return rows.some(
-    (row) => row.accountWarning || row.ifscWarning || row.modeWarning,
-  );
+  return rows.some((row) => bulkRowNeedsCorrection(row));
 }
 
 export function bulkRowNeedsCorrection(row: BulkTransferRow) {
-  return Boolean(row.accountWarning || row.ifscWarning || row.modeWarning);
+  return Boolean(
+    row.nameWarning ||
+      row.accountWarning ||
+      row.ifscWarning ||
+      row.modeWarning ||
+      row.amount <= 0,
+  );
 }

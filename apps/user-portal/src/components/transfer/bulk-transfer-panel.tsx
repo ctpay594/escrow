@@ -100,6 +100,19 @@ export function BulkTransferPanel({
     }
   }
 
+  function updateRowName(index: number, name: string) {
+    setRows((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index
+          ? withRowWarnings({
+              ...row,
+              beneficiary_account_name: name,
+            })
+          : row,
+      ),
+    );
+  }
+
   function updateRowAccount(index: number, accountNo: string) {
     const digits = accountNo.replace(/[^\d]/g, '');
     setRows((current) =>
@@ -142,16 +155,40 @@ export function BulkTransferPanel({
     );
   }
 
+  function updateRowAmount(index: number, amountText: string) {
+    const amount = Number.parseFloat(amountText.replace(/[,₹\s]/g, ''));
+    setRows((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index
+          ? withRowWarnings({
+              ...row,
+              amount: Number.isFinite(amount) ? amount : 0,
+            })
+          : row,
+      ),
+    );
+  }
+
   function withRowWarnings(row: BulkTransferRow): BulkTransferRow {
+    const nameWarning =
+      !row.beneficiary_account_name.trim() ||
+      row.beneficiary_account_name.trim().length < 2;
     const accountValid = /^\d{9,18}$/.test(row.beneficiary_account_no);
     const ifscValid = isIfscValid(row.beneficiary_ifsc);
     const precisionWarning =
       accountValid && looksLikeRoundedAccount(row.beneficiary_account_no);
+    const amountValid = Number.isFinite(row.amount) && row.amount > 0;
     const warnings: string[] = [];
+
+    if (nameWarning) {
+      warnings.push('Beneficiary name is missing. Add the name.');
+    }
 
     if (!accountValid) {
       warnings.push(
-        `Account number ${row.beneficiary_account_no || '(blank)'} is wrong. Use 9–18 digits.`,
+        row.beneficiary_account_no
+          ? `Account number ${row.beneficiary_account_no} is wrong. Use 9–18 digits.`
+          : 'Account number is missing. Enter 9–18 digits.',
       );
     } else if (precisionWarning) {
       warnings.push(
@@ -161,7 +198,9 @@ export function BulkTransferPanel({
 
     if (!ifscValid) {
       warnings.push(
-        `IFSC ${row.beneficiary_ifsc || '(blank)'} is wrong. Use a valid code like HDFC0001234.`,
+        row.beneficiary_ifsc
+          ? `IFSC ${row.beneficiary_ifsc} is wrong. Use a valid code like HDFC0001234.`
+          : 'IFSC is missing. Enter a valid code like HDFC0001234.',
       );
     }
 
@@ -169,12 +208,17 @@ export function BulkTransferPanel({
       warnings.push('Payout mode is wrong. Use IMPS, NEFT, or RTGS.');
     }
 
-    if (row.payout_mode === 'RTGS' && row.amount < 200_000) {
+    if (row.payout_mode === 'RTGS' && amountValid && row.amount < 200_000) {
       warnings.push('RTGS requires a minimum of ₹2,00,000. Correct the amount or mode.');
+    }
+
+    if (!amountValid) {
+      warnings.push('Amount is missing or invalid. Enter the transfer amount.');
     }
 
     return {
       ...row,
+      nameWarning,
       accountWarning: !accountValid || precisionWarning,
       ifscWarning: !ifscValid,
       warningMessage: warnings.join(' '),
@@ -195,6 +239,11 @@ export function BulkTransferPanel({
     }
 
     for (const row of rows) {
+      if (!row.beneficiary_account_name.trim() || row.beneficiary_account_name.trim().length < 2) {
+        toast.error(`Row ${row.rowNumber}: add a beneficiary name.`);
+        return;
+      }
+
       if (!/^\d{9,18}$/.test(row.beneficiary_account_no)) {
         toast.error(`Row ${row.rowNumber}: this account number is wrong. Correct it.`);
         return;
@@ -202,6 +251,11 @@ export function BulkTransferPanel({
 
       if (!isIfscValid(row.beneficiary_ifsc)) {
         toast.error(`Row ${row.rowNumber}: this IFSC is wrong. Correct it.`);
+        return;
+      }
+
+      if (!(row.amount > 0)) {
+        toast.error(`Row ${row.rowNumber}: enter a valid amount.`);
         return;
       }
 
@@ -261,8 +315,8 @@ export function BulkTransferPanel({
         <GlassCardHeader className="pb-3">
           <GlassCardTitle className="text-base">Bulk transfer</GlassCardTitle>
           <GlassCardDescription>
-            Upload Excel or CSV (name, account, IFSC, payout mode, amount).
-            Transfers are processed after you submit.
+            Upload Excel or CSV. Columns can be in any order — we detect name,
+            account, IFSC, mode, and amount even if a header is missing.
           </GlassCardDescription>
         </GlassCardHeader>
         <GlassCardContent className="space-y-4">
@@ -381,10 +435,10 @@ export function BulkTransferPanel({
       </GlassCard>
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden p-0">
-          <DialogHeader className="border-b border-white/50 px-6 py-4">
+        <DialogContent className="flex max-h-[100dvh] w-[calc(100%-0.75rem)] max-w-4xl flex-col overflow-hidden p-0 sm:max-h-[85vh]">
+          <DialogHeader className="border-b border-white/50 px-4 py-4 pr-12 sm:px-6">
             <DialogTitle>Review bulk transfer</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="text-pretty">
               {rows.length} transactions · Total {formatCurrency(totalAmount)}
               {remaining >= 0 ? (
                 <> · Balance after {formatCurrency(remaining)}</>
@@ -395,17 +449,131 @@ export function BulkTransferPanel({
           </DialogHeader>
 
           {hasAccountWarnings ? (
-            <div className="mx-6 mt-4 flex gap-2 rounded-xl border border-amber-200/80 bg-amber-50/75 px-3 py-2 text-xs text-amber-900 backdrop-blur-sm">
+            <div className="mx-4 mt-4 flex gap-2 rounded-xl border border-amber-200/80 bg-amber-50/75 px-3 py-2 text-xs text-amber-900 backdrop-blur-sm sm:mx-6">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <p>
-                Highlighted rows have a wrong account number or IFSC. Correct
-                them here before submitting.
+                Highlighted fields need a name, account, IFSC, mode, or amount.
+                Correct them here before submitting.
               </p>
             </div>
           ) : null}
 
-          <div className="max-h-[50vh] overflow-auto px-6 py-4">
-            <table className="min-w-full text-left text-sm">
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-4 sm:px-6">
+            <div className="space-y-3 md:hidden">
+              {rows.map((row, index) => {
+                const needsCorrection = bulkRowNeedsCorrection(row);
+
+                return (
+                  <div
+                    key={`${row.rowNumber}-${index}`}
+                    className={cn(
+                      glassInset(),
+                      'space-y-3 p-3',
+                      needsCorrection && 'border-amber-300/80 bg-amber-50/80',
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">#{index + 1}</p>
+                      <p className="text-sm font-medium tabular-nums">
+                        {formatCurrency(row.amount)}
+                      </p>
+                    </div>
+                    <label className="block space-y-1">
+                      <span className="text-[11px] text-muted-foreground">Beneficiary</span>
+                      <Input
+                        value={row.beneficiary_account_name}
+                        onChange={(event) =>
+                          updateRowName(index, event.target.value)
+                        }
+                        className={cn(
+                          'h-9',
+                          row.nameWarning &&
+                            'border-amber-400 bg-amber-50 focus-visible:ring-amber-400',
+                        )}
+                      />
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-[11px] text-muted-foreground">Account</span>
+                      <Input
+                        value={row.beneficiary_account_no}
+                        onChange={(event) =>
+                          updateRowAccount(index, event.target.value)
+                        }
+                        className={cn(
+                          'h-9 font-mono text-xs tracking-wide',
+                          row.accountWarning &&
+                            'border-amber-400 bg-amber-50 focus-visible:ring-amber-400',
+                        )}
+                        inputMode="numeric"
+                      />
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-muted-foreground">IFSC</span>
+                        <Input
+                          value={row.beneficiary_ifsc}
+                          onChange={(event) =>
+                            updateRowIfsc(index, event.target.value)
+                          }
+                          className={cn(
+                            'h-9 font-mono text-xs uppercase tracking-wide',
+                            row.ifscWarning &&
+                              'border-amber-400 bg-amber-50 focus-visible:ring-amber-400',
+                          )}
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-muted-foreground">Mode</span>
+                        <select
+                          value={row.payout_mode}
+                          onChange={(event) =>
+                            updateRowMode(
+                              index,
+                              event.target.value as BankPayoutMode,
+                            )
+                          }
+                          className={cn(
+                            'h-9 w-full rounded-md border bg-background px-2 text-xs',
+                            row.modeWarning
+                              ? 'border-amber-400 bg-amber-50'
+                              : 'border-input',
+                          )}
+                        >
+                          {PAYOUT_MODES.map((mode) => (
+                            <option key={mode} value={mode}>
+                              {mode}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <label className="block space-y-1">
+                      <span className="text-[11px] text-muted-foreground">Amount</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={row.amount || ''}
+                        onChange={(event) =>
+                          updateRowAmount(index, event.target.value)
+                        }
+                        className={cn(
+                          'h-9 tabular-nums',
+                          row.amount <= 0 &&
+                            'border-amber-400 bg-amber-50 focus-visible:ring-amber-400',
+                        )}
+                      />
+                    </label>
+                    {row.warningMessage ? (
+                      <p className="text-[11px] text-amber-800">{row.warningMessage}</p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden overflow-x-auto md:block">
+            <table className="min-w-[720px] w-full text-left text-sm">
               <thead className={cn(glassInset(), 'sticky top-0 text-muted-foreground')}>
                 <tr>
                   <th className="pb-2 pr-3 font-medium">#</th>
@@ -426,7 +594,19 @@ export function BulkTransferPanel({
                     className={needsCorrection ? 'bg-amber-50/80' : undefined}
                   >
                     <td className="py-2 pr-3 text-muted-foreground">{index + 1}</td>
-                    <td className="py-2 pr-3">{row.beneficiary_account_name}</td>
+                    <td className="py-2 pr-3">
+                      <Input
+                        value={row.beneficiary_account_name}
+                        onChange={(event) =>
+                          updateRowName(index, event.target.value)
+                        }
+                        className={cn(
+                          'h-8 min-w-[8rem]',
+                          row.nameWarning &&
+                            'border-amber-400 bg-amber-50 focus-visible:ring-amber-400',
+                        )}
+                      />
+                    </td>
                     <td className="py-2 pr-3">
                       <Input
                         value={row.beneficiary_account_no}
@@ -479,8 +659,21 @@ export function BulkTransferPanel({
                         ))}
                       </select>
                     </td>
-                    <td className="py-2 text-right tabular-nums">
-                      {formatCurrency(row.amount)}
+                    <td className="py-2 text-right">
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={row.amount || ''}
+                        onChange={(event) =>
+                          updateRowAmount(index, event.target.value)
+                        }
+                        className={cn(
+                          'ml-auto h-8 w-28 text-right tabular-nums',
+                          row.amount <= 0 &&
+                            'border-amber-400 bg-amber-50 focus-visible:ring-amber-400',
+                        )}
+                      />
                       {row.warningMessage ? (
                         <p className="mt-1 text-left text-[11px] font-normal text-amber-800">
                           {row.warningMessage}
@@ -492,9 +685,10 @@ export function BulkTransferPanel({
                 })}
               </tbody>
             </table>
+            </div>
           </div>
 
-          <DialogFooter className="border-t border-white/50 px-6 py-4">
+          <DialogFooter className="border-t border-white/50 px-4 py-4 sm:px-6">
             <Button variant="outline" onClick={() => setPreviewOpen(false)}>
               Cancel
             </Button>

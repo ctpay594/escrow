@@ -757,26 +757,8 @@ export class TransfersService {
       return null;
     }
 
-    if (mappedStatus === 'SUCCESS' && transfer.status === 'PROCESSING') {
-      await this.merchantsService.clearPendingForSuccessfulTransfer(
-        transfer.user_id,
-        Number(transfer.amount),
-      );
-    } else if (mappedStatus === 'FAILED' && transfer.status === 'PROCESSING') {
-      await this.merchantsService.releaseHeldFunds(
-        transfer.user_id,
-        Number(transfer.amount),
-      );
-    } else if (mappedStatus === 'FAILED' && transfer.status === 'SUCCESS') {
-      await this.merchantsService.creditBackAfterBankFailure(
-        transfer.user_id,
-        Number(transfer.amount),
-      );
-    } else {
-      return null;
-    }
-
-    const { error: updateError } = await this.supabaseService
+    const fromStatus = transfer.status;
+    const { data: flipped, error: updateError } = await this.supabaseService
       .getAdminClient()
       .from('transfers')
       .update({
@@ -786,10 +768,29 @@ export class TransfersService {
         escrow_response: entry.raw,
       })
       .eq('id', transfer.id)
-      .in('status', ['PROCESSING', 'SUCCESS']);
+      .eq('status', fromStatus)
+      .select('id')
+      .maybeSingle();
 
-    if (updateError) {
+    if (updateError || !flipped) {
       return null;
+    }
+
+    if (mappedStatus === 'SUCCESS' && fromStatus === 'PROCESSING') {
+      await this.merchantsService.clearPendingForSuccessfulTransfer(
+        transfer.user_id,
+        Number(transfer.amount),
+      );
+    } else if (mappedStatus === 'FAILED' && fromStatus === 'PROCESSING') {
+      await this.merchantsService.releaseHeldFunds(
+        transfer.user_id,
+        Number(transfer.amount),
+      );
+    } else if (mappedStatus === 'FAILED' && fromStatus === 'SUCCESS') {
+      await this.merchantsService.creditBackAfterBankFailure(
+        transfer.user_id,
+        Number(transfer.amount),
+      );
     }
 
     return this.toPublicTransfer(await this.fetchTransferRowById(transfer.id));

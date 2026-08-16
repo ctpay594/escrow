@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -25,6 +26,8 @@ const MERCHANT_PROFILE_BASIC_SELECT =
 
 @Injectable()
 export class MerchantsService {
+  private readonly logger = new Logger(MerchantsService.name);
+
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
@@ -982,6 +985,13 @@ export class MerchantsService {
     const ledger = await this.getLedgerByUserId(userId);
 
     if (!ledger) {
+      return;
+    }
+
+    if (ledger.pendingBalance + 0.001 < amount) {
+      this.logger.warn(
+        `Skip duplicate success debit for ${userId}: pending ${ledger.pendingBalance} < ${amount}`,
+      );
       return;
     }
 

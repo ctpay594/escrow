@@ -196,6 +196,10 @@ export class AdminUsersService {
     return this.merchantsService.listDepositsForUser(userId);
   }
 
+  listLedger(userId: string) {
+    return this.merchantsService.listLedgerForUser(userId);
+  }
+
   listAllDeposits() {
     return this.merchantsService.listDepositsForAdmin();
   }

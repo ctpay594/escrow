@@ -57,6 +57,27 @@ interface ManagedMerchant {
   created_at?: string;
 }
 
+interface LedgerEntry {
+  id: string;
+  direction: 'credit' | 'debit';
+  amount: number;
+  reason: string;
+  ref_id: string;
+  note: string | null;
+  real_before: number | null;
+  real_after: number | null;
+  created_at: string;
+}
+
+const LEDGER_REASON_LABELS: Record<string, string> = {
+  deposit: 'Deposit credited',
+  payout_hold: 'Transfer hold',
+  payout_success: 'Payout success',
+  payout_release: 'Hold released',
+  payout_bank_reversal: 'Bank reversal',
+  demo_adjust: 'Demo balance edit',
+};
+
 interface MerchantDetailPanelProps {
   merchantId: string;
 }
@@ -91,6 +112,7 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
   const [confirmAction, setConfirmAction] = useState<(() => Promise<void>) | null>(
     null,
   );
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
 
   const loadMerchant = useCallback(async () => {
     setError(null);
@@ -141,6 +163,23 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
   useEffect(() => {
     void loadMerchant();
   }, [loadMerchant]);
+
+  useEffect(() => {
+    void (async () => {
+      const response = await fetch(
+        `/api/users/${encodeURIComponent(merchantId)}/ledger`,
+        { cache: 'no-store' },
+      );
+
+      if (!response.ok) {
+        setLedger([]);
+        return;
+      }
+
+      const data = await response.json();
+      setLedger(Array.isArray(data) ? (data as LedgerEntry[]) : []);
+    })();
+  }, [merchantId, merchant?.real_balance, merchant?.demo_balance]);
 
   function askConfirmation(
     options: SeriousConfirmOptions,
@@ -669,6 +708,73 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
             <CopyField label="Load account" value={merchant.virtual_account_no ?? ''} />
             <CopyField label="IFSC" value={merchant.escrow_ifsc ?? ''} />
           </div>
+        </GlassCardContent>
+      </GlassCard>
+
+      <GlassCard>
+        <GlassCardHeader>
+          <GlassCardTitle>Balance log</GlassCardTitle>
+        </GlassCardHeader>
+        <GlassCardContent>
+          <p className="px-4 pb-2 text-xs text-muted-foreground">
+            Every credit or debit from now on is recorded with a reason and
+            time. History still shows transfers and deposits; this log is the
+            audit trail so the same payout cannot debit twice.
+          </p>
+          {ledger.length === 0 ? (
+            <p className="px-4 pb-4 text-sm text-muted-foreground">
+              No log rows yet. Run the ledger_entries SQL, then new balance
+              changes will appear here.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs text-muted-foreground">
+                    <th className="px-4 py-2 font-medium">When</th>
+                    <th className="px-4 py-2 font-medium">Why</th>
+                    <th className="px-4 py-2 font-medium">Amount</th>
+                    <th className="px-4 py-2 font-medium">Real after</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.map((entry) => (
+                    <tr key={entry.id} className="border-b last:border-0">
+                      <td className="whitespace-nowrap px-4 py-2 text-xs">
+                        {new Date(entry.created_at).toLocaleString('en-IN', {
+                          timeZone: 'Asia/Kolkata',
+                        })}
+                      </td>
+                      <td className="px-4 py-2">
+                        {LEDGER_REASON_LABELS[entry.reason] ?? entry.reason}
+                        {entry.note ? (
+                          <span className="block text-xs text-muted-foreground">
+                            {entry.note}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td
+                        className={cn(
+                          'px-4 py-2 font-medium',
+                          entry.direction === 'credit'
+                            ? 'text-emerald-600'
+                            : 'text-red-600',
+                        )}
+                      >
+                        {entry.direction === 'credit' ? '+' : '-'}
+                        {formatCurrency(entry.amount)}
+                      </td>
+                      <td className="px-4 py-2">
+                        {entry.real_after == null
+                          ? '—'
+                          : formatCurrency(entry.real_after)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </GlassCardContent>
       </GlassCard>
 

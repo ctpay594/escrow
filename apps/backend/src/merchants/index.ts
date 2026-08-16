@@ -4,4 +4,5 @@ export type {
   PublicDeposit,
   PublicMerchantProfile,
   AdminDepositListItem,
+  LedgerEntry,
 } from './merchants.types';

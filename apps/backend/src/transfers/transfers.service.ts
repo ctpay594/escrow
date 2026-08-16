@@ -78,6 +78,7 @@ export class TransfersService {
       input.userId,
       input.amount,
       ledger,
+      { reason: 'payout_hold', refId: payoutRef },
     );
 
     const { data, error } = await this.supabaseService
@@ -102,7 +103,10 @@ export class TransfersService {
       .single();
 
     if (error || !data) {
-      await this.merchantsService.releaseHeldFunds(input.userId, input.amount);
+      await this.merchantsService.releaseHeldFunds(input.userId, input.amount, {
+        reason: 'payout_release',
+        refId: payoutRef,
+      });
 
       throw new InternalServerErrorException(
         'Failed to create transfer request',
@@ -180,14 +184,18 @@ export class TransfersService {
 
     const batchId = batchRow.id as string;
     const createdTransfers: PublicTransfer[] = [];
-    const heldAmounts: number[] = [];
+    const heldItems: { amount: number; payoutRef: string }[] = [];
 
     try {
       for (const item of items) {
-        await this.merchantsService.holdFundsForTransfer(userId, item.amount);
-        heldAmounts.push(item.amount);
-
         const payoutRef = generatePayoutRef();
+        await this.merchantsService.holdFundsForTransfer(
+          userId,
+          item.amount,
+          undefined,
+          { reason: 'payout_hold', refId: payoutRef },
+        );
+        heldItems.push({ amount: item.amount, payoutRef });
         const { data, error } = await this.supabaseService
           .getAdminClient()
           .from('transfers')
@@ -223,10 +231,14 @@ export class TransfersService {
         );
       }
     } catch (error) {
-      for (let index = heldAmounts.length - 1; index >= 0; index -= 1) {
+      for (let index = heldItems.length - 1; index >= 0; index -= 1) {
         await this.merchantsService.releaseHeldFunds(
           userId,
-          heldAmounts[index],
+          heldItems[index].amount,
+          {
+            reason: 'payout_release',
+            refId: heldItems[index].payoutRef,
+          },
         );
       }
 
@@ -780,16 +792,19 @@ export class TransfersService {
       await this.merchantsService.clearPendingForSuccessfulTransfer(
         transfer.user_id,
         Number(transfer.amount),
+        { reason: 'payout_success', refId: transfer.id },
       );
     } else if (mappedStatus === 'FAILED' && fromStatus === 'PROCESSING') {
       await this.merchantsService.releaseHeldFunds(
         transfer.user_id,
         Number(transfer.amount),
+        { reason: 'payout_release', refId: transfer.id },
       );
     } else if (mappedStatus === 'FAILED' && fromStatus === 'SUCCESS') {
       await this.merchantsService.creditBackAfterBankFailure(
         transfer.user_id,
         Number(transfer.amount),
+        { reason: 'payout_bank_reversal', refId: transfer.id },
       );
     }
 
@@ -877,6 +892,7 @@ export class TransfersService {
     await this.merchantsService.releaseHeldFunds(
       transfer.user_id,
       Number(transfer.amount),
+      { reason: 'payout_release', refId: transfer.id },
     );
 
     const { error: updateError } = await this.supabaseService

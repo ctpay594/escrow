@@ -138,6 +138,11 @@ export class AdminUsersController {
     return this.adminUsersService.listDeposits(id);
   }
 
+  @Get(':id/ledger')
+  listLedger(@Param('id') id: string) {
+    return this.adminUsersService.listLedger(id);
+  }
+
   @Delete(':id')
   deleteUser(@Param('id') id: string) {
     return this.adminUsersService.deleteUser(id);

@@ -11,6 +11,8 @@ import type {
   AdminDepositListItem,
   AdminMerchantListItem,
   CreateMerchantInput,
+  LedgerEntry,
+  LedgerMutationRef,
   MerchantAccountStatus,
   MerchantApprovalMode,
   MerchantProfileRow,
@@ -656,6 +658,8 @@ export class MerchantsService {
     const balanceMap = await this.loadBalanceMapByUserIds([userId]);
     const balances = balanceMap.get(userId);
     const balanceMode = balances?.balance_mode ?? 'demo';
+    const previousDemo = balances?.demo_balance ?? 0;
+    const ledger = await this.getLedgerByUserId(userId);
 
     const payload: Record<string, number> = {
       demo_balance: demoBalance,
@@ -663,6 +667,30 @@ export class MerchantsService {
 
     if (balanceMode === 'demo') {
       payload.available_balance = demoBalance;
+    }
+
+    const delta = Number((demoBalance - previousDemo).toFixed(2));
+
+    if (ledger && delta !== 0) {
+      const claimed = await this.claimLedgerEvent({
+        userId,
+        merchantId: ledger.merchantId,
+        direction: delta > 0 ? 'credit' : 'debit',
+        amount: Math.abs(delta),
+        reason: 'demo_adjust',
+        refId: crypto.randomUUID(),
+        note: `Demo balance set to ${demoBalance.toFixed(2)}`,
+        realBefore: ledger.realBalance,
+        realAfter: ledger.realBalance,
+        pendingBefore: ledger.pendingBalance,
+        pendingAfter: ledger.pendingBalance,
+        availableAfter:
+          balanceMode === 'demo' ? demoBalance : ledger.spendable,
+      });
+
+      if (!claimed) {
+        return;
+      }
     }
 
     const { error } = await this.supabaseService
@@ -919,15 +947,17 @@ export class MerchantsService {
   async holdFundsForTransfer(
     userId: string,
     amount: number,
-    ledgerSnapshot?: {
+    _ledgerSnapshot?: {
+      merchantId?: string;
       balanceMode: 'real' | 'demo';
       realBalance: number;
       demoBalance: number;
       pendingBalance: number;
       spendable: number;
     },
+    ref?: LedgerMutationRef,
   ): Promise<void> {
-    const ledger = ledgerSnapshot ?? (await this.getLedgerByUserId(userId));
+    const ledger = await this.getLedgerByUserId(userId);
 
     if (!ledger) {
       throw new NotFoundException('Merchant profile not found');
@@ -938,6 +968,31 @@ export class MerchantsService {
     }
 
     const nextPending = Number((ledger.pendingBalance + amount).toFixed(2));
+    const nextAvailable =
+      ledger.balanceMode === 'real'
+        ? Number(Math.max(ledger.realBalance - nextPending, 0).toFixed(2))
+        : Number((ledger.demoBalance - amount).toFixed(2));
+
+    if (ref) {
+      const claimed = await this.claimLedgerEvent({
+        userId,
+        merchantId: ledger.merchantId,
+        direction: 'debit',
+        amount,
+        reason: ref.reason,
+        refId: ref.refId,
+        note: ref.note,
+        realBefore: ledger.realBalance,
+        realAfter: ledger.realBalance,
+        pendingBefore: ledger.pendingBalance,
+        pendingAfter: nextPending,
+        availableAfter: nextAvailable,
+      });
+
+      if (!claimed) {
+        return;
+      }
+    }
 
     if (ledger.balanceMode === 'real') {
       const { error } = await this.supabaseService
@@ -945,9 +1000,7 @@ export class MerchantsService {
         .from('merchants')
         .update({
           pending_balance: nextPending,
-          available_balance: Number(
-            Math.max(ledger.realBalance - nextPending, 0).toFixed(2),
-          ),
+          available_balance: nextAvailable,
         })
         .eq('user_id', userId);
 
@@ -981,11 +1034,48 @@ export class MerchantsService {
   async clearPendingForSuccessfulTransfer(
     userId: string,
     amount: number,
+    ref?: LedgerMutationRef,
   ): Promise<void> {
     const ledger = await this.getLedgerByUserId(userId);
 
     if (!ledger) {
       return;
+    }
+
+    const nextPending = Number(
+      Math.max(ledger.pendingBalance - amount, 0).toFixed(2),
+    );
+    const nextReal =
+      ledger.balanceMode === 'real'
+        ? Number(Math.max(ledger.realBalance - amount, 0).toFixed(2))
+        : ledger.realBalance;
+    const nextAvailable =
+      ledger.balanceMode === 'real'
+        ? Number(Math.max(nextReal - nextPending, 0).toFixed(2))
+        : ledger.spendable;
+
+    if (ref) {
+      const claimed = await this.claimLedgerEvent({
+        userId,
+        merchantId: ledger.merchantId,
+        direction: 'debit',
+        amount,
+        reason: ref.reason,
+        refId: ref.refId,
+        note: ref.note,
+        realBefore: ledger.realBalance,
+        realAfter: nextReal,
+        pendingBefore: ledger.pendingBalance,
+        pendingAfter: nextPending,
+        availableAfter: nextAvailable,
+      });
+
+      if (!claimed) {
+        this.logger.warn(
+          `Skip duplicate success debit for ${userId} ref ${ref.refId}`,
+        );
+        return;
+      }
     }
 
     if (ledger.pendingBalance + 0.001 < amount) {
@@ -995,23 +1085,14 @@ export class MerchantsService {
       return;
     }
 
-    const nextPending = Number(
-      Math.max(ledger.pendingBalance - amount, 0).toFixed(2),
-    );
-
     if (ledger.balanceMode === 'real') {
-      const nextReal = Number(
-        Math.max(ledger.realBalance - amount, 0).toFixed(2),
-      );
       const { error } = await this.supabaseService
         .getAdminClient()
         .from('merchants')
         .update({
           real_balance: nextReal,
           pending_balance: nextPending,
-          available_balance: Number(
-            Math.max(nextReal - nextPending, 0).toFixed(2),
-          ),
+          available_balance: nextAvailable,
         })
         .eq('user_id', userId);
 
@@ -1037,7 +1118,11 @@ export class MerchantsService {
     }
   }
 
-  async releaseHeldFunds(userId: string, amount: number): Promise<void> {
+  async releaseHeldFunds(
+    userId: string,
+    amount: number,
+    ref?: LedgerMutationRef,
+  ): Promise<void> {
     const ledger = await this.getLedgerByUserId(userId);
 
     if (!ledger) {
@@ -1047,6 +1132,35 @@ export class MerchantsService {
     const nextPending = Number(
       Math.max(ledger.pendingBalance - amount, 0).toFixed(2),
     );
+    const nextDemo =
+      ledger.balanceMode === 'demo'
+        ? Number((ledger.demoBalance + amount).toFixed(2))
+        : ledger.demoBalance;
+    const nextAvailable =
+      ledger.balanceMode === 'real'
+        ? Number(Math.max(ledger.realBalance - nextPending, 0).toFixed(2))
+        : nextDemo;
+
+    if (ref) {
+      const claimed = await this.claimLedgerEvent({
+        userId,
+        merchantId: ledger.merchantId,
+        direction: 'credit',
+        amount,
+        reason: ref.reason,
+        refId: ref.refId,
+        note: ref.note,
+        realBefore: ledger.realBalance,
+        realAfter: ledger.realBalance,
+        pendingBefore: ledger.pendingBalance,
+        pendingAfter: nextPending,
+        availableAfter: nextAvailable,
+      });
+
+      if (!claimed) {
+        return;
+      }
+    }
 
     if (ledger.balanceMode === 'real') {
       const { error } = await this.supabaseService
@@ -1054,9 +1168,7 @@ export class MerchantsService {
         .from('merchants')
         .update({
           pending_balance: nextPending,
-          available_balance: Number(
-            Math.max(ledger.realBalance - nextPending, 0).toFixed(2),
-          ),
+          available_balance: nextAvailable,
         })
         .eq('user_id', userId);
 
@@ -1067,7 +1179,6 @@ export class MerchantsService {
       return;
     }
 
-    const nextDemo = Number((ledger.demoBalance + amount).toFixed(2));
     const { error } = await this.supabaseService
       .getAdminClient()
       .from('merchants')
@@ -1086,6 +1197,7 @@ export class MerchantsService {
   async creditBackAfterBankFailure(
     userId: string,
     amount: number,
+    ref?: LedgerMutationRef,
   ): Promise<void> {
     const ledger = await this.getLedgerByUserId(userId);
 
@@ -1093,16 +1205,47 @@ export class MerchantsService {
       return;
     }
 
+    const nextReal =
+      ledger.balanceMode === 'real'
+        ? Number((ledger.realBalance + amount).toFixed(2))
+        : ledger.realBalance;
+    const nextDemo =
+      ledger.balanceMode === 'demo'
+        ? Number((ledger.demoBalance + amount).toFixed(2))
+        : ledger.demoBalance;
+    const nextAvailable =
+      ledger.balanceMode === 'real'
+        ? Number(Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2))
+        : nextDemo;
+
+    if (ref) {
+      const claimed = await this.claimLedgerEvent({
+        userId,
+        merchantId: ledger.merchantId,
+        direction: 'credit',
+        amount,
+        reason: ref.reason,
+        refId: ref.refId,
+        note: ref.note,
+        realBefore: ledger.realBalance,
+        realAfter: nextReal,
+        pendingBefore: ledger.pendingBalance,
+        pendingAfter: ledger.pendingBalance,
+        availableAfter: nextAvailable,
+      });
+
+      if (!claimed) {
+        return;
+      }
+    }
+
     if (ledger.balanceMode === 'real') {
-      const nextReal = Number((ledger.realBalance + amount).toFixed(2));
       const { error } = await this.supabaseService
         .getAdminClient()
         .from('merchants')
         .update({
           real_balance: nextReal,
-          available_balance: Number(
-            Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2),
-          ),
+          available_balance: nextAvailable,
         })
         .eq('user_id', userId);
 
@@ -1115,7 +1258,6 @@ export class MerchantsService {
       return;
     }
 
-    const nextDemo = Number((ledger.demoBalance + amount).toFixed(2));
     const { error } = await this.supabaseService
       .getAdminClient()
       .from('merchants')
@@ -1209,6 +1351,30 @@ export class MerchantsService {
     const balanceMap = await this.loadBalanceMapByUserIds([merchant.userId]);
     const currentReal = balanceMap.get(merchant.userId)?.real_balance ?? 0;
     const nextReal = Number((currentReal + input.amount).toFixed(2));
+    const ledger = await this.getLedgerByUserId(merchant.userId);
+
+    if (ledger) {
+      const claimed = await this.claimLedgerEvent({
+        userId: merchant.userId,
+        merchantId: merchant.merchantId,
+        direction: 'credit',
+        amount: input.amount,
+        reason: 'deposit',
+        refId: input.dedupeKey,
+        note: input.utr ? `UTR ${input.utr}` : undefined,
+        realBefore: currentReal,
+        realAfter: nextReal,
+        pendingBefore: ledger.pendingBalance,
+        pendingAfter: ledger.pendingBalance,
+        availableAfter: Number(
+          Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2),
+        ),
+      });
+
+      if (!claimed) {
+        return { outcome: 'already_credited', merchantId: merchant.merchantId };
+      }
+    }
 
     await this.updateRealBalanceByUserId(merchant.userId, nextReal);
 
@@ -1311,6 +1477,109 @@ export class MerchantsService {
       remitter_account: (row.remitter_account as string | null) ?? null,
       created_at: row.created_at as string,
     }));
+  }
+
+  async listLedgerForUser(userId: string): Promise<LedgerEntry[]> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('ledger_entries')
+      .select(
+        'id, direction, amount, reason, ref_id, note, real_before, real_after, pending_before, pending_after, available_after, created_at',
+      )
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (error) {
+      if (this.isMissingLedgerTable(error.message, error.code)) {
+        return [];
+      }
+
+      throw new InternalServerErrorException(
+        error.message ?? 'Failed to load balance log',
+      );
+    }
+
+    return (data ?? []).map((row) => ({
+      id: row.id as string,
+      direction: row.direction === 'debit' ? 'debit' : 'credit',
+      amount: Number(row.amount ?? 0),
+      reason: String(row.reason ?? ''),
+      ref_id: String(row.ref_id ?? ''),
+      note: (row.note as string | null) ?? null,
+      real_before:
+        row.real_before == null ? null : Number(row.real_before),
+      real_after: row.real_after == null ? null : Number(row.real_after),
+      pending_before:
+        row.pending_before == null ? null : Number(row.pending_before),
+      pending_after:
+        row.pending_after == null ? null : Number(row.pending_after),
+      available_after:
+        row.available_after == null ? null : Number(row.available_after),
+      created_at: row.created_at as string,
+    }));
+  }
+
+  private isMissingLedgerTable(message: string, code?: string): boolean {
+    return (
+      code === '42P01' ||
+      code === 'PGRST205' ||
+      (message.toLowerCase().includes('ledger_entries') &&
+        (message.toLowerCase().includes('does not exist') ||
+          message.toLowerCase().includes('schema cache')))
+    );
+  }
+
+  private async claimLedgerEvent(input: {
+    userId: string;
+    merchantId: string;
+    direction: 'credit' | 'debit';
+    amount: number;
+    reason: string;
+    refId: string;
+    note?: string;
+    realBefore: number;
+    realAfter: number;
+    pendingBefore: number;
+    pendingAfter: number;
+    availableAfter: number;
+  }): Promise<boolean> {
+    const { error } = await this.supabaseService
+      .getAdminClient()
+      .from('ledger_entries')
+      .insert({
+        user_id: input.userId,
+        merchant_id: input.merchantId,
+        direction: input.direction,
+        amount: input.amount,
+        reason: input.reason,
+        ref_id: input.refId,
+        note: input.note ?? null,
+        real_before: input.realBefore,
+        real_after: input.realAfter,
+        pending_before: input.pendingBefore,
+        pending_after: input.pendingAfter,
+        available_after: input.availableAfter,
+      });
+
+    if (!error) {
+      return true;
+    }
+
+    if (error.code === '23505') {
+      return false;
+    }
+
+    if (this.isMissingLedgerTable(error.message, error.code)) {
+      this.logger.warn(
+        'ledger_entries table missing — run the SQL in 001_schema.sql, continuing without a log row',
+      );
+      return true;
+    }
+
+    throw new InternalServerErrorException(
+      error.message ?? 'Failed to record balance log',
+    );
   }
 
   async listDepositsForAdmin(): Promise<AdminDepositListItem[]> {

@@ -44,14 +44,88 @@ function DashboardSkeleton() {
   );
 }
 
-function isToday(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  return (
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear()
+const IST = 'Asia/Kolkata';
+
+function istYmd(iso: string) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso));
+}
+
+function shiftYmd(ymd: string, days: number) {
+  const [year, month, day] = ymd.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function formatDayHeading(ymd: string, todayYmd: string) {
+  if (ymd === todayYmd) {
+    return 'Today';
+  }
+
+  if (ymd === shiftYmd(todayYmd, -1)) {
+    return 'Yesterday';
+  }
+
+  const [year, month, day] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day, 6, 30)).toLocaleDateString(
+    'en-IN',
+    { weekday: 'short', day: 'numeric', month: 'short' },
   );
+}
+
+function mondayOfIstWeek(todayYmd: string) {
+  const weekday = new Date(`${todayYmd}T12:00:00+05:30`).getDay();
+  const daysFromMonday = (weekday + 6) % 7;
+  return shiftYmd(todayYmd, -daysFromMonday);
+}
+
+function VolumeRow({
+  label,
+  bucket,
+  emphasize,
+}: {
+  label: string;
+  bucket: VolumeBucket;
+  emphasize?: boolean;
+}) {
+  const net = bucket.inAmount - bucket.outAmount;
+
+  return (
+    <tr className={emphasize ? 'font-medium' : undefined}>
+      <td className="py-2 pr-3 align-top">{label}</td>
+      <td className="py-2 pr-3 align-top tabular-nums text-emerald-700">
+        +{formatCurrency(bucket.inAmount)}
+        <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+          {bucket.inCount} txn{bucket.inCount === 1 ? '' : 's'}
+        </span>
+      </td>
+      <td className="py-2 pr-3 align-top tabular-nums text-red-600">
+        −{formatCurrency(bucket.outAmount)}
+        <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+          {bucket.outCount} txn{bucket.outCount === 1 ? '' : 's'}
+        </span>
+      </td>
+      <td className="py-2 align-top tabular-nums">
+        {net >= 0 ? '+' : '−'}
+        {formatCurrency(Math.abs(net))}
+      </td>
+    </tr>
+  );
+}
+
+interface VolumeBucket {
+  inAmount: number;
+  inCount: number;
+  outAmount: number;
+  outCount: number;
+}
+
+function emptyBucket(): VolumeBucket {
+  return { inAmount: 0, inCount: 0, outAmount: 0, outCount: 0 };
 }
 
 export function AccountDashboard({
@@ -154,40 +228,59 @@ export function AccountDashboard({
   const transfersEnabled = canMerchantTransfer(merchant.account_status);
 
   const snapshot = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const todayYmd = istYmd(new Date().toISOString());
+    const weekStart = mondayOfIstWeek(todayYmd);
+    const dayKeys = [0, 1, 2, 3].map((offset) => shiftYmd(todayYmd, -offset));
+    const byDay = new Map<string, VolumeBucket>(
+      dayKeys.map((key) => [key, emptyBucket()]),
+    );
+    const week = emptyBucket();
 
-    const paidOutToday = transfers
-      .filter(
-        (t) =>
-          t.kind !== 'deposit' &&
-          t.status === 'SUCCESS' &&
-          isToday(t.created_at),
-      )
-      .reduce((sum, t) => sum + t.amount, 0);
+    for (const row of transfers) {
+      const day = istYmd(row.created_at);
+      const isDeposit = row.kind === 'deposit';
+      const isPaidOut =
+        !isDeposit && row.status === 'SUCCESS';
 
-    const collectedToday = transfers
-      .filter((t) => t.kind === 'deposit' && isToday(t.created_at))
-      .reduce((sum, t) => sum + t.amount, 0);
+      if (!isDeposit && !isPaidOut) {
+        continue;
+      }
+
+      const apply = (bucket: VolumeBucket) => {
+        if (isDeposit) {
+          bucket.inAmount += row.amount;
+          bucket.inCount += 1;
+        } else {
+          bucket.outAmount += row.amount;
+          bucket.outCount += 1;
+        }
+      };
+
+      const dayBucket = byDay.get(day);
+      if (dayBucket) {
+        apply(dayBucket);
+      }
+
+      if (day >= weekStart && day <= todayYmd) {
+        apply(week);
+      }
+    }
 
     const awaitingApproval = transfers.filter(
       (t) => t.status === 'PENDING_APPROVAL',
     ).length;
-
     const inProgress = transfers.filter((t) => t.status === 'PROCESSING').length;
 
-    const completedThisWeek = transfers.filter(
-      (t) =>
-        t.kind !== 'deposit' &&
-        t.status === 'SUCCESS' &&
-        new Date(t.created_at).getTime() >= weekAgo,
-    ).length;
-
     return {
-      paidOutToday,
-      collectedToday,
+      todayYmd,
       awaitingApproval,
       inProgress,
-      completedThisWeek,
+      days: dayKeys.map((key) => ({
+        key,
+        label: formatDayHeading(key, todayYmd),
+        ...byDay.get(key)!,
+      })),
+      week,
     };
   }, [transfers]);
 
@@ -270,18 +363,52 @@ export function AccountDashboard({
             </div>
             <div className={cn(glassInset(), 'px-4 py-3')}>
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Paid out today
+                This week
               </p>
               <p className="mt-1 text-xl font-semibold tabular-nums">
-                {formatCurrency(snapshot.paidOutToday)}
+                {formatCurrency(snapshot.week.outAmount)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {snapshot.completedThisWeek} payout{snapshot.completedThisWeek === 1 ? '' : 's'} this week
-                {snapshot.collectedToday > 0
-                  ? ` · collected ${formatCurrency(snapshot.collectedToday)}`
-                  : ''}
+                out · in {formatCurrency(snapshot.week.inAmount)}
               </p>
             </div>
+          </div>
+
+          <div className="border-t border-white/50 pt-4">
+            <p className="mb-3 text-sm font-medium text-foreground">
+              In and out
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[20rem] text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-muted-foreground">
+                    <th className="pb-2 pr-3 font-medium">Day</th>
+                    <th className="pb-2 pr-3 font-medium">Incoming</th>
+                    <th className="pb-2 pr-3 font-medium">Outgoing</th>
+                    <th className="pb-2 font-medium">Net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshot.days.map((day) => (
+                    <VolumeRow
+                      key={day.key}
+                      label={day.label}
+                      bucket={day}
+                      emphasize={day.key === snapshot.todayYmd}
+                    />
+                  ))}
+                  <VolumeRow
+                    label="This week"
+                    bucket={snapshot.week}
+                    emphasize
+                  />
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Incoming is deposits. Outgoing is successful payouts. Days use
+              India time.
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-2 border-t border-white/50 pt-4">

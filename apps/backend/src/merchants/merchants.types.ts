@@ -73,6 +73,35 @@ export interface AdminDepositListItem extends PublicDeposit {
   merchant_id: string | null;
 }
 
+export type LedgerReason =
+  | 'deposit'
+  | 'payout_hold'
+  | 'payout_success'
+  | 'payout_release'
+  | 'payout_bank_reversal'
+  | 'demo_adjust';
+
+export interface LedgerMutationRef {
+  reason: LedgerReason;
+  refId: string;
+  note?: string;
+}
+
+export interface LedgerEntry {
+  id: string;
+  direction: 'credit' | 'debit';
+  amount: number;
+  reason: string;
+  ref_id: string;
+  note: string | null;
+  real_before: number | null;
+  real_after: number | null;
+  pending_before: number | null;
+  pending_after: number | null;
+  available_after: number | null;
+  created_at: string;
+}
+
 export interface CreateMerchantInput {
   userId: string;
   merchantName: string;

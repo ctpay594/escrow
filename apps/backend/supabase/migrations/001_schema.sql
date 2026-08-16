@@ -271,3 +271,25 @@ CREATE TABLE IF NOT EXISTS public.webhook_events (
   process_result TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS public.ledger_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  merchant_id UUID REFERENCES public.merchants(id) ON DELETE SET NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('credit', 'debit')),
+  amount NUMERIC(18, 2) NOT NULL,
+  reason TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  note TEXT,
+  real_before NUMERIC(18, 2),
+  real_after NUMERIC(18, 2),
+  pending_before NUMERIC(18, 2),
+  pending_after NUMERIC(18, 2),
+  available_after NUMERIC(18, 2),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ledger_entries_reason_ref_unique
+  ON public.ledger_entries (reason, ref_id);
+CREATE INDEX IF NOT EXISTS ledger_entries_user_id_idx
+  ON public.ledger_entries (user_id, created_at DESC);

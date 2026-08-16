@@ -63,7 +63,7 @@ import {
 } from '@/lib/history-display';
 import { cn } from '@/lib/utils';
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 type HistoryPeriod = '48h' | '7d' | 'all';
 type HistoryType = 'all' | 'payout' | 'deposit' | 'batch';

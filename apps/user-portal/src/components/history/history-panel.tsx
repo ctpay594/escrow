@@ -64,7 +64,7 @@ import { transferUtr } from '@/lib/transfer-display';
 import type { DepositItem, TransferItem } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 20;
 
 type HistoryPeriod = '48h' | '7d' | 'all';
 

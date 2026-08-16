@@ -49,6 +49,12 @@ import {
 } from '@/lib/export-transfers';
 import { formatCurrency, formatDate, formatTableDate } from '@/lib/format';
 import {
+  defaultCustomRange,
+  historyPeriodLabel,
+  statementRangeMeta,
+  type HistoryPeriodPreset,
+} from '@/lib/history-date-range';
+import {
   aggregateBatchStatus,
   batchDisplayTitle,
   buildHistoryEntries,
@@ -66,13 +72,7 @@ import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 20;
 
-type HistoryPeriod = '48h' | '7d' | 'all';
-
-const PERIOD_LABEL: Record<HistoryPeriod, string> = {
-  '48h': 'Last 48 hours',
-  '7d': 'Last 7 days',
-  all: 'All time',
-};
+type HistoryPeriod = HistoryPeriodPreset;
 
 interface HistoryPanelProps {
   accountLabel: string;
@@ -128,6 +128,8 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [period, setPeriod] = useState<HistoryPeriod>('7d');
+  const [rangeFrom, setRangeFrom] = useState(() => defaultCustomRange().from);
+  const [rangeTo, setRangeTo] = useState(() => defaultCustomRange().to);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<TransferItem | null>(null);
   const [selectedBatch, setSelectedBatch] = useState<Extract<
@@ -268,7 +270,12 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
     const query = search.trim().toLowerCase();
 
     return historyEntries.filter((entry) => {
-      if (!entryMatchesPeriod(entry, period)) {
+      if (
+        !entryMatchesPeriod(entry, period, {
+          from: rangeFrom,
+          to: rangeTo,
+        })
+      ) {
         return false;
       }
 
@@ -278,7 +285,10 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
 
       return entryMatchesSearch(entry, query);
     });
-  }, [historyEntries, search, statusFilter, period]);
+  }, [historyEntries, search, statusFilter, period, rangeFrom, rangeTo]);
+
+  const activePeriodLabel = historyPeriodLabel(period, rangeFrom, rangeTo);
+  const rangeMeta = statementRangeMeta(period, rangeFrom, rangeTo);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice(
@@ -288,7 +298,22 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, period]);
+  }, [search, statusFilter, period, rangeFrom, rangeTo]);
+
+  function downloadFilteredStatement() {
+    if (filtered.length === 0) {
+      toast.message('Nothing to download for the current filters');
+      return;
+    }
+
+    exportHistoryEntriesCsv(filtered, accountLabel, {
+      periodLabel: activePeriodLabel,
+      fromLabel: rangeMeta.fromLabel,
+      toLabel: rangeMeta.toLabel,
+      filenameSlug: rangeMeta.filenameSlug,
+    });
+    toast.success('Statement downloaded');
+  }
 
   function downloadBatchSheet(
     entry: Extract<HistoryEntry, { kind: 'batch' }>,
@@ -340,7 +365,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
     <div className="space-y-6">
       <PageHeader
         title="History"
-        description={`${PERIOD_LABEL[period]} · deposits and transfers`}
+        description={`${activePeriodLabel} · deposits and transfers`}
         action={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -354,29 +379,11 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() => {
-                  exportHistoryEntriesCsv(
-                    filtered,
-                    accountLabel,
-                    PERIOD_LABEL[period],
-                  );
-                  toast.success('CSV exported');
-                }}
-              >
-                Export CSV
+              <DropdownMenuItem onClick={downloadFilteredStatement}>
+                Download statement (CSV)
               </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  exportHistoryEntriesCsv(
-                    filtered,
-                    accountLabel,
-                    PERIOD_LABEL[period],
-                  );
-                  toast.success('Excel-compatible CSV exported');
-                }}
-              >
-                Export Excel (.csv)
+              <DropdownMenuItem onClick={downloadFilteredStatement}>
+                Download for Excel
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -399,17 +406,52 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
               <Select
                 value={period}
-                onValueChange={(value) => setPeriod(value as HistoryPeriod)}
+                onValueChange={(value) => {
+                  const next = value as HistoryPeriod;
+                  setPeriod(next);
+                  if (next === 'custom') {
+                    const defaults = defaultCustomRange();
+                    setRangeFrom((current) => current || defaults.from);
+                    setRangeTo((current) => current || defaults.to);
+                  }
+                }}
               >
-                <SelectTrigger className="w-full sm:w-[148px]" aria-label="Filter by period">
+                <SelectTrigger className="w-full sm:w-[160px]" aria-label="Filter by period">
                   <SelectValue placeholder="Period" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="48h">Last 48 hours</SelectItem>
                   <SelectItem value="7d">Last 7 days</SelectItem>
                   <SelectItem value="all">All time</SelectItem>
+                  <SelectItem value="custom">Custom range</SelectItem>
                 </SelectContent>
               </Select>
+              {period === 'custom' ? (
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    From
+                    <Input
+                      type="date"
+                      value={rangeFrom}
+                      max={rangeTo || undefined}
+                      onChange={(event) => setRangeFrom(event.target.value)}
+                      className="h-9 w-full sm:w-[150px]"
+                      aria-label="Statement from date"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    To
+                    <Input
+                      type="date"
+                      value={rangeTo}
+                      min={rangeFrom || undefined}
+                      onChange={(event) => setRangeTo(event.target.value)}
+                      className="h-9 w-full sm:w-[150px]"
+                      aria-label="Statement to date"
+                    />
+                  </label>
+                </div>
+              ) : null}
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-full sm:w-[148px]" aria-label="Filter by status">
                   <SelectValue placeholder="Status" />
@@ -708,8 +750,11 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
 
               <div className="flex items-center justify-between border-t border-white/50 px-5 py-4">
                 <p className="text-sm text-muted-foreground">
-                  {PERIOD_LABEL[period]} · {filtered.length} item
+                  {activePeriodLabel} · {filtered.length} item
                   {filtered.length === 1 ? '' : 's'}
+                  {period === 'custom'
+                    ? ` · ${rangeMeta.fromLabel} → ${rangeMeta.toLabel}`
+                    : ''}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button

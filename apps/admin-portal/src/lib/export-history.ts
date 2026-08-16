@@ -63,8 +63,11 @@ export function exportAdminHistoryCsv(
   options: {
     merchantLabel: string;
     periodLabel: string;
+    fromLabel: string;
+    toLabel: string;
     typeLabel: string;
     statusLabel: string;
+    filenameSlug?: string;
   },
 ) {
   const headers = [
@@ -82,11 +85,16 @@ export function exportAdminHistoryCsv(
   ];
 
   const metaRows = [
-    ['Merchant', options.merchantLabel],
-    ['Period', options.periodLabel],
-    ['Type', options.typeLabel],
-    ['Status', options.statusLabel],
-    ['Generated', formatDate(new Date().toISOString())],
+    ['Document', 'CTPay Admin Transaction Statement'],
+    ['Merchant / scope', options.merchantLabel],
+    ['Statement from', options.fromLabel],
+    ['Statement to', options.toLabel],
+    ['Period shown', options.periodLabel],
+    ['Type filter', options.typeLabel],
+    ['Status filter', options.statusLabel],
+    ['Timezone', 'Asia/Kolkata (IST)'],
+    ['Transactions included', String(entries.length)],
+    ['Generated at', formatDate(new Date().toISOString())],
     [],
   ];
 
@@ -127,7 +135,9 @@ export function exportAdminHistoryCsv(
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const merchantSlug = slugForFilename(options.merchantLabel) || 'all-merchants';
-  const periodSlug = options.periodLabel.toLowerCase().replace(/\s+/g, '-');
+  const periodSlug =
+    options.filenameSlug ??
+    options.periodLabel.toLowerCase().replace(/\s+/g, '-');
   link.href = url;
   link.download = `CTPay-admin-statement-${merchantSlug}-${periodSlug}-${statementDate()}.csv`;
   link.click();

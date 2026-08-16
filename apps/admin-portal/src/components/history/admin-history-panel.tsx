@@ -42,6 +42,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { exportAdminHistoryCsv } from '@/lib/export-history';
 import { formatCurrency, formatDate, formatTableDate } from '@/lib/format';
 import {
+  defaultCustomRange,
+  historyPeriodLabel,
+  statementRangeMeta,
+  type HistoryPeriodPreset,
+} from '@/lib/history-date-range';
+import {
   glassInset,
   glassSurface,
   glassTableHead,
@@ -65,7 +71,7 @@ import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 20;
 
-type HistoryPeriod = '48h' | '7d' | 'all';
+type HistoryPeriod = HistoryPeriodPreset;
 type HistoryType = 'all' | 'payout' | 'deposit' | 'batch';
 
 interface OnboardedMerchant {
@@ -85,12 +91,6 @@ interface AdminDeposit {
   remitter_account: string | null;
   created_at: string;
 }
-
-const PERIOD_LABEL: Record<HistoryPeriod, string> = {
-  '48h': 'Last 48 hours',
-  '7d': 'Last 7 days',
-  all: 'All time',
-};
 
 function redirectToLoginIfUnauthorized(response: Response): boolean {
   if (response.status === 401) {
@@ -169,6 +169,8 @@ export function AdminHistoryPanel() {
     () => searchParams.get('merchant') ?? 'all',
   );
   const [period, setPeriod] = useState<HistoryPeriod>('7d');
+  const [rangeFrom, setRangeFrom] = useState(() => defaultCustomRange().from);
+  const [rangeTo, setRangeTo] = useState(() => defaultCustomRange().to);
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState<HistoryType>('all');
   const [page, setPage] = useState(1);
@@ -296,7 +298,12 @@ export function AdminHistoryPanel() {
     const query = search.trim().toLowerCase();
 
     return historyEntries.filter((entry) => {
-      if (!entryMatchesPeriod(entry, period)) {
+      if (
+        !entryMatchesPeriod(entry, period, {
+          from: rangeFrom,
+          to: rangeTo,
+        })
+      ) {
         return false;
       }
 
@@ -314,14 +321,26 @@ export function AdminHistoryPanel() {
 
       return entryMatchesSearch(entry, query);
     });
-  }, [historyEntries, search, merchantId, period, statusFilter, typeFilter]);
+  }, [
+    historyEntries,
+    search,
+    merchantId,
+    period,
+    rangeFrom,
+    rangeTo,
+    statusFilter,
+    typeFilter,
+  ]);
+
+  const activePeriodLabel = historyPeriodLabel(period, rangeFrom, rangeTo);
+  const rangeMeta = statementRangeMeta(period, rangeFrom, rangeTo);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   useEffect(() => {
     setPage(1);
-  }, [search, merchantId, period, statusFilter, typeFilter]);
+  }, [search, merchantId, period, rangeFrom, rangeTo, statusFilter, typeFilter]);
 
   function openEntry(entry: AdminHistoryEntry) {
     if (entry.kind === 'batch') {
@@ -368,9 +387,12 @@ export function AdminHistoryPanel() {
 
     exportAdminHistoryCsv(filtered, {
       merchantLabel: selectedMerchantLabel,
-      periodLabel: PERIOD_LABEL[period],
+      periodLabel: activePeriodLabel,
+      fromLabel: rangeMeta.fromLabel,
+      toLabel: rangeMeta.toLabel,
       typeLabel: typeLabel[typeFilter],
       statusLabel,
+      filenameSlug: rangeMeta.filenameSlug,
     });
     toast.success('Statement downloaded');
   }
@@ -379,7 +401,7 @@ export function AdminHistoryPanel() {
     <div className="space-y-6">
       <PageHeader
         title="History"
-        description={`${PERIOD_LABEL[period]} · all onboarded merchants`}
+        description={`${activePeriodLabel} · all onboarded merchants`}
         action={
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -434,17 +456,52 @@ export function AdminHistoryPanel() {
               </Select>
               <Select
                 value={period}
-                onValueChange={(value) => setPeriod(value as HistoryPeriod)}
+                onValueChange={(value) => {
+                  const next = value as HistoryPeriod;
+                  setPeriod(next);
+                  if (next === 'custom') {
+                    const defaults = defaultCustomRange();
+                    setRangeFrom((current) => current || defaults.from);
+                    setRangeTo((current) => current || defaults.to);
+                  }
+                }}
               >
-                <SelectTrigger className="w-full sm:w-[148px]" aria-label="Filter by period">
+                <SelectTrigger className="w-full sm:w-[160px]" aria-label="Filter by period">
                   <SelectValue placeholder="Period" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="48h">Last 48 hours</SelectItem>
                   <SelectItem value="7d">Last 7 days</SelectItem>
                   <SelectItem value="all">All time</SelectItem>
+                  <SelectItem value="custom">Custom range</SelectItem>
                 </SelectContent>
               </Select>
+              {period === 'custom' ? (
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    From
+                    <Input
+                      type="date"
+                      value={rangeFrom}
+                      max={rangeTo || undefined}
+                      onChange={(event) => setRangeFrom(event.target.value)}
+                      className="h-9 w-full sm:w-[150px]"
+                      aria-label="Statement from date"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    To
+                    <Input
+                      type="date"
+                      value={rangeTo}
+                      min={rangeFrom || undefined}
+                      onChange={(event) => setRangeTo(event.target.value)}
+                      className="h-9 w-full sm:w-[150px]"
+                      aria-label="Statement to date"
+                    />
+                  </label>
+                </div>
+              ) : null}
               <Select
                 value={typeFilter}
                 onValueChange={(value) => setTypeFilter(value as HistoryType)}
@@ -651,8 +708,11 @@ export function AdminHistoryPanel() {
 
               <div className="flex items-center justify-between border-t border-white/50 px-5 py-4">
                 <p className="text-sm text-muted-foreground">
-                  {PERIOD_LABEL[period]} · {filtered.length} item
+                  {activePeriodLabel} · {filtered.length} item
                   {filtered.length === 1 ? '' : 's'}
+                  {period === 'custom'
+                    ? ` · ${rangeMeta.fromLabel} → ${rangeMeta.toLabel}`
+                    : ''}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button

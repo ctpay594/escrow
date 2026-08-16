@@ -46,8 +46,17 @@ function csvCell(value: string | number) {
 export function exportTransfersCsv(
   transfers: TransferItem[],
   accountLabel: string,
-  periodLabel = 'Last 7 days',
+  options: {
+    periodLabel?: string;
+    fromLabel?: string;
+    toLabel?: string;
+    filenameSlug?: string;
+  } = {},
 ) {
+  const periodLabel = options.periodLabel ?? 'Last 7 days';
+  const fromLabel = options.fromLabel ?? '—';
+  const toLabel = options.toLabel ?? '—';
+
   const headers = [
     'Date',
     'Type',
@@ -62,9 +71,14 @@ export function exportTransfersCsv(
   ];
 
   const metaRows = [
+    ['Document', 'CTPay Transaction Statement'],
     ['Account', accountLabel],
-    ['Period', periodLabel],
-    ['Generated', formatDate(new Date().toISOString())],
+    ['Statement from', fromLabel],
+    ['Statement to', toLabel],
+    ['Period shown', periodLabel],
+    ['Timezone', 'Asia/Kolkata (IST)'],
+    ['Transactions included', String(transfers.length)],
+    ['Generated at', formatDate(new Date().toISOString())],
     [],
   ];
 
@@ -89,7 +103,8 @@ export function exportTransfersCsv(
   link.href = url;
   link.download = buildStatementFilename(
     accountLabel,
-    periodLabel.toLowerCase().replace(/\s+/g, '-'),
+    options.filenameSlug ??
+      periodLabel.toLowerCase().replace(/\s+/g, '-'),
   );
   link.click();
   URL.revokeObjectURL(url);
@@ -113,8 +128,17 @@ function statementRowFromTransfer(transfer: TransferItem) {
 export function exportHistoryEntriesCsv(
   entries: HistoryEntry[],
   accountLabel: string,
-  periodLabel = 'Last 7 days',
+  options: {
+    periodLabel?: string;
+    fromLabel?: string;
+    toLabel?: string;
+    filenameSlug?: string;
+  } = {},
 ) {
+  const periodLabel = options.periodLabel ?? 'Last 7 days';
+  const fromLabel = options.fromLabel ?? '—';
+  const toLabel = options.toLabel ?? '—';
+
   const headers = [
     'Date',
     'Type',
@@ -129,9 +153,14 @@ export function exportHistoryEntriesCsv(
   ];
 
   const metaRows = [
+    ['Document', 'CTPay Transaction Statement'],
     ['Account', accountLabel],
-    ['Period', periodLabel],
-    ['Generated', formatDate(new Date().toISOString())],
+    ['Statement from', fromLabel],
+    ['Statement to', toLabel],
+    ['Period shown', periodLabel],
+    ['Timezone', 'Asia/Kolkata (IST)'],
+    ['Transactions included', String(entries.length)],
+    ['Generated at', formatDate(new Date().toISOString())],
     [],
   ];
 
@@ -173,7 +202,8 @@ export function exportHistoryEntriesCsv(
   link.href = url;
   link.download = buildStatementFilename(
     accountLabel,
-    periodLabel.toLowerCase().replace(/\s+/g, '-'),
+    options.filenameSlug ??
+      periodLabel.toLowerCase().replace(/\s+/g, '-'),
   );
   link.click();
   URL.revokeObjectURL(url);

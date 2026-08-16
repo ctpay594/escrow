@@ -1,4 +1,5 @@
 import { isDepositRow } from '@/lib/deposit-display';
+import { createdAtInCustomRange } from '@/lib/history-date-range';
 import type { TransferItem } from '@/lib/types';
 import { transferUtr } from '@/lib/transfer-display';
 
@@ -210,16 +211,26 @@ export function entryMatchesStatus(entry: HistoryEntry, statusFilter: string) {
 
 export function entryMatchesPeriod(
   entry: HistoryEntry,
-  period: '48h' | '7d' | 'all',
+  period: '48h' | '7d' | 'all' | 'custom',
+  range?: { from: string; to: string },
 ) {
+  const createdAt =
+    entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
+
+  if (period === 'custom') {
+    if (!range?.from || !range?.to) {
+      return false;
+    }
+
+    return createdAtInCustomRange(createdAt, range.from, range.to);
+  }
+
   if (period === 'all') {
     return true;
   }
 
   const windowMs =
     period === '48h' ? 48 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  const createdAt =
-    entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
 
   return Date.now() - new Date(createdAt).getTime() <= windowMs;
 }

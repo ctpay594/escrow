@@ -51,6 +51,7 @@ import { formatCurrency, formatDate, formatTableDate } from '@/lib/format';
 import {
   defaultCustomRange,
   historyPeriodLabel,
+  rangeForPreset,
   statementRangeMeta,
   type HistoryPeriodPreset,
 } from '@/lib/history-date-range';
@@ -127,7 +128,7 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [period, setPeriod] = useState<HistoryPeriod>('7d');
+  const [period, setPeriod] = useState<HistoryPeriod>('custom');
   const [rangeFrom, setRangeFrom] = useState(() => defaultCustomRange().from);
   const [rangeTo, setRangeTo] = useState(() => defaultCustomRange().to);
   const [page, setPage] = useState(1);
@@ -409,49 +410,24 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                 onValueChange={(value) => {
                   const next = value as HistoryPeriod;
                   setPeriod(next);
-                  if (next === 'custom') {
-                    const defaults = defaultCustomRange();
-                    setRangeFrom((current) => current || defaults.from);
-                    setRangeTo((current) => current || defaults.to);
+                  const nextRange = rangeForPreset(next);
+                  if (nextRange) {
+                    setRangeFrom(nextRange.from);
+                    setRangeTo(nextRange.to);
                   }
                 }}
               >
-                <SelectTrigger className="w-full sm:w-[160px]" aria-label="Filter by period">
+                <SelectTrigger className="w-full sm:w-[160px]" aria-label="Quick period">
                   <SelectValue placeholder="Period" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="48h">Last 48 hours</SelectItem>
+                  <SelectItem value="48h">Last 2 days</SelectItem>
                   <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="30d">Last 30 days</SelectItem>
                   <SelectItem value="all">All time</SelectItem>
-                  <SelectItem value="custom">Custom range</SelectItem>
+                  <SelectItem value="custom">Custom dates</SelectItem>
                 </SelectContent>
               </Select>
-              {period === 'custom' ? (
-                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    From
-                    <Input
-                      type="date"
-                      value={rangeFrom}
-                      max={rangeTo || undefined}
-                      onChange={(event) => setRangeFrom(event.target.value)}
-                      className="h-9 w-full sm:w-[150px]"
-                      aria-label="Statement from date"
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    To
-                    <Input
-                      type="date"
-                      value={rangeTo}
-                      min={rangeFrom || undefined}
-                      onChange={(event) => setRangeTo(event.target.value)}
-                      className="h-9 w-full sm:w-[150px]"
-                      aria-label="Statement to date"
-                    />
-                  </label>
-                </div>
-              ) : null}
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-full sm:w-[148px]" aria-label="Filter by status">
                   <SelectValue placeholder="Status" />
@@ -477,6 +453,52 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                 {isCheckingStatus ? 'Checking…' : 'Check status'}
               </Button>
             </div>
+          </div>
+          <div
+            className={cn(
+              glassInset(),
+              'flex flex-col gap-3 px-3 py-3 sm:flex-row sm:flex-wrap sm:items-end',
+              period === 'all' && 'opacity-60',
+            )}
+          >
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="text-xs font-medium text-foreground">Date range</p>
+              <p className="text-[11px] text-muted-foreground">
+                {period === 'all'
+                  ? 'All time selected — date filters are ignored.'
+                  : 'Pick from and to dates (India time). List and download use this range only.'}
+              </p>
+            </div>
+            <label className="flex min-w-[9.5rem] flex-col gap-1 text-xs text-muted-foreground">
+              From
+              <Input
+                type="date"
+                value={rangeFrom}
+                max={rangeTo || undefined}
+                disabled={period === 'all'}
+                onChange={(event) => {
+                  setRangeFrom(event.target.value);
+                  setPeriod('custom');
+                }}
+                className="h-9"
+                aria-label="From date"
+              />
+            </label>
+            <label className="flex min-w-[9.5rem] flex-col gap-1 text-xs text-muted-foreground">
+              To
+              <Input
+                type="date"
+                value={rangeTo}
+                min={rangeFrom || undefined}
+                disabled={period === 'all'}
+                onChange={(event) => {
+                  setRangeTo(event.target.value);
+                  setPeriod('custom');
+                }}
+                className="h-9"
+                aria-label="To date"
+              />
+            </label>
           </div>
           {hasInFlightTransfers ? (
             <p className="text-xs text-muted-foreground">
@@ -752,9 +774,6 @@ export function HistoryPanel({ accountLabel }: HistoryPanelProps) {
                 <p className="text-sm text-muted-foreground">
                   {activePeriodLabel} · {filtered.length} item
                   {filtered.length === 1 ? '' : 's'}
-                  {period === 'custom'
-                    ? ` · ${rangeMeta.fromLabel} → ${rangeMeta.toLabel}`
-                    : ''}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button

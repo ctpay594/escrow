@@ -211,26 +211,26 @@ export function entryMatchesStatus(entry: HistoryEntry, statusFilter: string) {
 
 export function entryMatchesPeriod(
   entry: HistoryEntry,
-  period: '48h' | '7d' | 'all' | 'custom',
+  period: '48h' | '7d' | '30d' | 'all' | 'custom',
   range?: { from: string; to: string },
 ) {
-  const createdAt =
-    entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
-
-  if (period === 'custom') {
-    if (!range?.from || !range?.to) {
-      return false;
-    }
-
-    return createdAtInCustomRange(createdAt, range.from, range.to);
-  }
-
   if (period === 'all') {
     return true;
   }
 
+  const createdAt =
+    entry.kind === 'batch' ? entry.created_at : entry.item.created_at;
+
+  if (range?.from && range?.to) {
+    return createdAtInCustomRange(createdAt, range.from, range.to);
+  }
+
   const windowMs =
-    period === '48h' ? 48 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+    period === '48h'
+      ? 48 * 60 * 60 * 1000
+      : period === '30d'
+        ? 30 * 24 * 60 * 60 * 1000
+        : 7 * 24 * 60 * 60 * 1000;
 
   return Date.now() - new Date(createdAt).getTime() <= windowMs;
 }

@@ -1,6 +1,6 @@
 const IST = 'Asia/Kolkata';
 
-export type HistoryPeriodPreset = '48h' | '7d' | 'all' | 'custom';
+export type HistoryPeriodPreset = '48h' | '7d' | '30d' | 'all' | 'custom';
 
 export function todayYmdIst(now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -20,6 +20,31 @@ export function shiftYmd(ymd: string, days: number) {
 export function defaultCustomRange(now = new Date()) {
   const to = todayYmdIst(now);
   return { from: shiftYmd(to, -6), to };
+}
+
+export function rangeForPreset(
+  preset: HistoryPeriodPreset,
+  now = new Date(),
+): { from: string; to: string } | null {
+  const to = todayYmdIst(now);
+
+  if (preset === 'all') {
+    return null;
+  }
+
+  if (preset === '48h') {
+    return { from: shiftYmd(to, -1), to };
+  }
+
+  if (preset === '7d') {
+    return { from: shiftYmd(to, -6), to };
+  }
+
+  if (preset === '30d') {
+    return { from: shiftYmd(to, -29), to };
+  }
+
+  return defaultCustomRange(now);
 }
 
 export function formatYmdLong(ymd: string) {
@@ -64,40 +89,18 @@ export function createdAtInCustomRange(
   return created >= dayStartMs(from) && created <= dayEndMs(to);
 }
 
-export function createdAtInPreset(
-  createdAtIso: string,
-  period: Exclude<HistoryPeriodPreset, 'custom'>,
-  now = Date.now(),
-) {
-  if (period === 'all') {
-    return true;
-  }
-
-  const windowMs =
-    period === '48h' ? 48 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  return now - new Date(createdAtIso).getTime() <= windowMs;
-}
-
 export function historyPeriodLabel(
   period: HistoryPeriodPreset,
   fromYmd: string,
   toYmd: string,
 ) {
-  if (period === '48h') {
-    return 'Last 48 hours';
-  }
-
-  if (period === '7d') {
-    return 'Last 7 days';
-  }
-
   if (period === 'all') {
     return 'All time';
   }
 
   const { from, to } = normalizeRange(fromYmd, toYmd);
   if (!from || !to) {
-    return 'Custom range';
+    return 'Select dates';
   }
 
   if (from === to) {
@@ -113,21 +116,6 @@ export function statementRangeMeta(
   toYmd: string,
   now = new Date(),
 ) {
-  if (period === 'custom') {
-    const { from, to } = normalizeRange(fromYmd, toYmd);
-    return {
-      fromLabel: from ? formatYmdLong(from) : '—',
-      toLabel: to ? formatYmdLong(to) : '—',
-      periodLabel: historyPeriodLabel(period, fromYmd, toYmd),
-      filenameSlug:
-        from && to
-          ? from === to
-            ? from
-            : `${from}_to_${to}`
-          : 'custom-range',
-    };
-  }
-
   if (period === 'all') {
     return {
       fromLabel: 'Start of available history',
@@ -137,22 +125,12 @@ export function statementRangeMeta(
     };
   }
 
-  if (period === '48h') {
-    const from = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-    return {
-      fromLabel: from.toLocaleString('en-IN', { timeZone: IST }),
-      toLabel: now.toLocaleString('en-IN', { timeZone: IST }),
-      periodLabel: 'Last 48 hours',
-      filenameSlug: 'last-48-hours',
-    };
-  }
-
-  const to = todayYmdIst(now);
-  const from = shiftYmd(to, -6);
+  const { from, to } = normalizeRange(fromYmd, toYmd);
   return {
-    fromLabel: formatYmdLong(from),
-    toLabel: formatYmdLong(to),
-    periodLabel: 'Last 7 days',
-    filenameSlug: `${from}_to_${to}`,
+    fromLabel: from ? formatYmdLong(from) : '—',
+    toLabel: to ? formatYmdLong(to) : '—',
+    periodLabel: historyPeriodLabel(period, fromYmd, toYmd),
+    filenameSlug:
+      from && to ? (from === to ? from : `${from}_to_${to}`) : 'custom-range',
   };
 }

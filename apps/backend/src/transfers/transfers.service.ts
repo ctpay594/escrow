@@ -18,6 +18,7 @@ import type {
   AdminTransferListItem,
   ApproveBatchResult,
   BulkTransferResult,
+  CreateCompanyTransferInput,
   CreateTransferInput,
   PublicTransfer,
   ReconcileTransfersResult,
@@ -27,7 +28,7 @@ import type {
 } from './transfers.types';
 
 const PUBLIC_TRANSFER_FIELDS =
-  'payout_ref, amount, payout_mode, transaction_note, beneficiary_account_name, beneficiary_account_no, beneficiary_ifsc, beneficiary_vpa, status, utr, bank_ref, created_at, updated_at';
+  'source, payout_ref, amount, payout_mode, transaction_note, beneficiary_account_name, beneficiary_account_no, beneficiary_ifsc, beneficiary_vpa, status, utr, bank_ref, created_at, updated_at';
 
 const PUBLIC_TRANSFER_SELECT = `id, ${PUBLIC_TRANSFER_FIELDS}`;
 
@@ -117,6 +118,243 @@ export class TransfersService {
       (data as TransferRecord).id,
       ledger.approvalMode,
     );
+  }
+
+  async createCompanyTransfer(
+    input: CreateCompanyTransferInput,
+  ): Promise<PublicTransfer> {
+    this.validateTransferRules({
+      userId: 'company',
+      ...input,
+    });
+
+    await this.assertCompanyBalance(input.amount);
+
+    const credentials = this.merchantsService.getPlatformCredentials();
+    const payee = this.resolvePayee(credentials.apiKey, {
+      merchantName: 'Company account',
+    });
+    const payoutRef = generatePayoutRef();
+
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('transfers')
+      .insert({
+        user_id: null,
+        merchant_id: null,
+        source: 'company',
+        payout_ref: payoutRef,
+        amount: input.amount,
+        payout_mode: input.payoutMode,
+        transaction_note: input.transactionNote ?? null,
+        beneficiary_account_name: input.beneficiaryAccountName,
+        beneficiary_account_no: input.beneficiaryAccountNo ?? null,
+        beneficiary_ifsc: input.beneficiaryIfsc ?? null,
+        beneficiary_vpa: input.beneficiaryVpa ?? null,
+        payee_user_ref: payee.userRef,
+        payee_user_name: payee.userName,
+        status: 'PENDING_APPROVAL',
+      })
+      .select('id')
+      .single();
+
+    if (error || !data) {
+      throw new InternalServerErrorException(
+        error?.message?.includes('source')
+          ? 'Run the ledger/transfers schema SQL (source column) in Supabase, then retry'
+          : 'Failed to create company transfer',
+      );
+    }
+
+    const transferId = (data as { id: string }).id;
+
+    try {
+      const transfer = await this.approveTransfer(transferId);
+      this.transferReconcileService.scheduleReconcile();
+      return transfer;
+    } catch (submitError) {
+      this.logger.error(
+        `Company transfer submit failed for ${transferId}: ${
+          submitError instanceof Error ? submitError.message : 'unknown'
+        }`,
+      );
+
+      await this.supabaseService
+        .getAdminClient()
+        .from('transfers')
+        .update({
+          status: 'FAILED',
+          escrow_response: {
+            error:
+              submitError instanceof Error
+                ? submitError.message
+                : 'Payout submit failed',
+          },
+        })
+        .eq('id', transferId)
+        .eq('status', 'PENDING_APPROVAL');
+
+      throw submitError instanceof BadRequestException ||
+        submitError instanceof InternalServerErrorException
+        ? submitError
+        : new InternalServerErrorException(
+            submitError instanceof Error
+              ? submitError.message
+              : 'Failed to submit company payout',
+          );
+    }
+  }
+
+  async createCompanyBulkTransfer(
+    items: CreateCompanyTransferInput[],
+    label?: string,
+  ): Promise<BulkTransferResult> {
+    if (items.length === 0) {
+      throw new BadRequestException('At least one transfer is required');
+    }
+
+    if (items.length > 500) {
+      throw new BadRequestException('Maximum 500 transfers per bulk upload');
+    }
+
+    for (const item of items) {
+      this.validateTransferRules({ userId: 'company', ...item });
+    }
+
+    const totalAmount = Number(
+      items.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+    );
+
+    await this.assertCompanyBalance(totalAmount);
+
+    const credentials = this.merchantsService.getPlatformCredentials();
+    const payee = this.resolvePayee(credentials.apiKey, {
+      merchantName: 'Company account',
+    });
+
+    const { data: batchRow, error: batchError } = await this.supabaseService
+      .getAdminClient()
+      .from('transfer_batches')
+      .insert({
+        user_id: null,
+        merchant_id: null,
+        source: 'company',
+        label: label?.trim() || null,
+        total_amount: totalAmount,
+        transfer_count: items.length,
+      })
+      .select('id, label, total_amount, transfer_count, created_at')
+      .single();
+
+    if (batchError || !batchRow) {
+      throw new InternalServerErrorException(
+        batchError?.message?.includes('source')
+          ? 'Run the transfers schema SQL (source column) in Supabase, then retry'
+          : 'Failed to create company transfer batch',
+      );
+    }
+
+    const batchId = batchRow.id as string;
+    const createdTransfers: PublicTransfer[] = [];
+
+    try {
+      for (const item of items) {
+        const payoutRef = generatePayoutRef();
+        const { data, error } = await this.supabaseService
+          .getAdminClient()
+          .from('transfers')
+          .insert({
+            user_id: null,
+            merchant_id: null,
+            source: 'company',
+            batch_id: batchId,
+            payout_ref: payoutRef,
+            amount: item.amount,
+            payout_mode: item.payoutMode,
+            transaction_note: item.transactionNote ?? null,
+            beneficiary_account_name: item.beneficiaryAccountName,
+            beneficiary_account_no: item.beneficiaryAccountNo ?? null,
+            beneficiary_ifsc: item.beneficiaryIfsc ?? null,
+            beneficiary_vpa: item.beneficiaryVpa ?? null,
+            payee_user_ref: payee.userRef,
+            payee_user_name: payee.userName,
+            status: 'PENDING_APPROVAL',
+          })
+          .select('id')
+          .single();
+
+        if (error || !data) {
+          throw new InternalServerErrorException(
+            'Failed to create company bulk transfer row',
+          );
+        }
+
+        createdTransfers.push(
+          this.toPublicTransfer(
+            await this.fetchTransferRowById((data as TransferRecord).id),
+          ),
+        );
+      }
+    } catch (error) {
+      await this.supabaseService
+        .getAdminClient()
+        .from('transfers')
+        .delete()
+        .eq('batch_id', batchId);
+
+      await this.supabaseService
+        .getAdminClient()
+        .from('transfer_batches')
+        .delete()
+        .eq('id', batchId);
+
+      throw error;
+    }
+
+    const approveResult = await this.approveBatch(batchId);
+
+    if (approveResult.failed.length > 0) {
+      const failedIds = approveResult.failed.map((item) => item.transfer_id);
+      await this.supabaseService
+        .getAdminClient()
+        .from('transfers')
+        .update({
+          status: 'FAILED',
+          escrow_response: { error: 'Company payout submit failed' },
+        })
+        .in('id', failedIds)
+        .eq('status', 'PENDING_APPROVAL');
+    }
+
+    this.transferReconcileService.scheduleReconcile();
+
+    return {
+      batch: {
+        id: batchId,
+        label: (batchRow.label as string | null) ?? null,
+        total_amount: Number(batchRow.total_amount),
+        transfer_count: Number(batchRow.transfer_count),
+        created_at: batchRow.created_at as string,
+      },
+      transfers: approveResult.transfers,
+      total_amount: totalAmount,
+      transfer_count: items.length,
+    };
+  }
+
+  private async assertCompanyBalance(amount: number): Promise<void> {
+    const credentials = this.merchantsService.getPlatformCredentials();
+    const balanceResult = await this.escrowStackService.fetchTransactionBalance(
+      credentials.apiKey,
+    );
+    const available =
+      balanceResult.availableBalance ?? balanceResult.balance ?? 0;
+
+    if (available + 0.001 < amount) {
+      throw new BadRequestException(
+        `Insufficient company bank balance. Need ${amount}, available ${available}`,
+      );
+    }
   }
 
   async createBulkTransfer(
@@ -431,7 +669,7 @@ export class TransfersService {
     }
 
     const credentials = await this.merchantsService.getDecryptedCredentials(
-      transfer.user_id,
+      transfer.user_id ?? 'company',
     );
     const payee =
       transfer.payee_user_ref && transfer.payee_user_ref.length >= 5
@@ -789,23 +1027,29 @@ export class TransfersService {
     }
 
     if (mappedStatus === 'SUCCESS' && fromStatus === 'PROCESSING') {
-      await this.merchantsService.clearPendingForSuccessfulTransfer(
-        transfer.user_id,
-        Number(transfer.amount),
-        { reason: 'payout_success', refId: transfer.id },
-      );
+      if (!this.isCompanyTransfer(transfer)) {
+        await this.merchantsService.clearPendingForSuccessfulTransfer(
+          transfer.user_id!,
+          Number(transfer.amount),
+          { reason: 'payout_success', refId: transfer.id },
+        );
+      }
     } else if (mappedStatus === 'FAILED' && fromStatus === 'PROCESSING') {
-      await this.merchantsService.releaseHeldFunds(
-        transfer.user_id,
-        Number(transfer.amount),
-        { reason: 'payout_release', refId: transfer.id },
-      );
+      if (!this.isCompanyTransfer(transfer)) {
+        await this.merchantsService.releaseHeldFunds(
+          transfer.user_id!,
+          Number(transfer.amount),
+          { reason: 'payout_release', refId: transfer.id },
+        );
+      }
     } else if (mappedStatus === 'FAILED' && fromStatus === 'SUCCESS') {
-      await this.merchantsService.creditBackAfterBankFailure(
-        transfer.user_id,
-        Number(transfer.amount),
-        { reason: 'payout_bank_reversal', refId: transfer.id },
-      );
+      if (!this.isCompanyTransfer(transfer)) {
+        await this.merchantsService.creditBackAfterBankFailure(
+          transfer.user_id!,
+          Number(transfer.amount),
+          { reason: 'payout_bank_reversal', refId: transfer.id },
+        );
+      }
     }
 
     return this.toPublicTransfer(await this.fetchTransferRowById(transfer.id));
@@ -889,11 +1133,13 @@ export class TransfersService {
       throw new BadRequestException('Transfer is not pending approval');
     }
 
-    await this.merchantsService.releaseHeldFunds(
-      transfer.user_id,
-      Number(transfer.amount),
-      { reason: 'payout_release', refId: transfer.id },
-    );
+    if (!this.isCompanyTransfer(transfer) && transfer.user_id) {
+      await this.merchantsService.releaseHeldFunds(
+        transfer.user_id,
+        Number(transfer.amount),
+        { reason: 'payout_release', refId: transfer.id },
+      );
+    }
 
     const { error: updateError } = await this.supabaseService
       .getAdminClient()
@@ -1011,16 +1257,24 @@ export class TransfersService {
     };
   }
 
+  private isCompanyTransfer(transfer: TransferRecord): boolean {
+    return transfer.source === 'company' || !transfer.user_id;
+  }
+
   private toAdminTransfer(row: Record<string, unknown>): AdminTransferListItem {
     const users = row.users as { username?: string } | null;
     const merchants = row.merchants as { merchant_name?: string } | null;
+    const source = row.source === 'company' ? 'company' : 'merchant';
+    const isCompany = source === 'company' || !row.user_id;
 
     return {
       ...this.toPublicTransfer(row as unknown as TransferRecord),
-      user_id: String(row.user_id),
-      merchant_id: String(row.merchant_id),
-      username: users?.username ?? '—',
-      merchant_name: merchants?.merchant_name ?? '—',
+      user_id: row.user_id ? String(row.user_id) : null,
+      merchant_id: row.merchant_id ? String(row.merchant_id) : null,
+      username: isCompany ? 'company' : (users?.username ?? '—'),
+      merchant_name: isCompany
+        ? 'Company account'
+        : (merchants?.merchant_name ?? '—'),
       payee_user_ref: row.payee_user_ref ? String(row.payee_user_ref) : null,
       payee_user_name: row.payee_user_name ? String(row.payee_user_name) : null,
       escrow_response:
@@ -1034,12 +1288,22 @@ export class TransfersService {
     const normalized = message.toLowerCase();
 
     return (
-      normalized.includes('batch_id') || normalized.includes('transfer_batches')
+      normalized.includes('batch_id') ||
+      normalized.includes('transfer_batches') ||
+      normalized.includes('source')
     );
   }
 
   private transferSelectCandidates(): string[] {
-    return [PUBLIC_TRANSFER_SELECT_WITH_BATCH, PUBLIC_TRANSFER_SELECT];
+    const withoutSource =
+      'payout_ref, amount, payout_mode, transaction_note, beneficiary_account_name, beneficiary_account_no, beneficiary_ifsc, beneficiary_vpa, status, utr, bank_ref, created_at, updated_at';
+
+    return [
+      PUBLIC_TRANSFER_SELECT_WITH_BATCH,
+      PUBLIC_TRANSFER_SELECT,
+      `id, batch_id, ${withoutSource}`,
+      `id, ${withoutSource}`,
+    ];
   }
 
   private async fetchTransferRows(
@@ -1112,6 +1376,7 @@ export class TransfersService {
     return {
       id: record.id,
       batch_id: record.batch_id ?? null,
+      source: record.source === 'company' ? 'company' : 'merchant',
       payout_ref: record.payout_ref,
       amount: Number(record.amount),
       payout_mode: record.payout_mode,

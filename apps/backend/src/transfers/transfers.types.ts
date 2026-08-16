@@ -7,10 +7,13 @@ export type TransferStatus =
 
 export type PayoutMode = 'IMPS' | 'NEFT' | 'RTGS' | 'UPI';
 
+export type TransferSource = 'merchant' | 'company';
+
 export interface TransferRecord {
   id: string;
-  user_id: string;
-  merchant_id: string;
+  user_id: string | null;
+  merchant_id: string | null;
+  source: TransferSource;
   batch_id: string | null;
   payout_ref: string;
   amount: number;
@@ -33,6 +36,7 @@ export interface TransferRecord {
 export interface PublicTransfer {
   id: string;
   batch_id: string | null;
+  source: TransferSource;
   payout_ref: string;
   amount: number;
   payout_mode: PayoutMode;
@@ -48,6 +52,16 @@ export interface PublicTransfer {
   updated_at: string;
 }
 
+export interface CreateCompanyTransferInput {
+  amount: number;
+  payoutMode: PayoutMode;
+  transactionNote?: string;
+  beneficiaryAccountName: string;
+  beneficiaryAccountNo?: string;
+  beneficiaryIfsc?: string;
+  beneficiaryVpa?: string;
+}
+
 export interface CreateTransferInput {
   userId: string;
   amount: number;
@@ -60,8 +74,8 @@ export interface CreateTransferInput {
 }
 
 export interface AdminTransferListItem extends PublicTransfer {
-  user_id: string;
-  merchant_id: string;
+  user_id: string | null;
+  merchant_id: string | null;
   merchant_name: string;
   username: string;
   payee_user_ref: string | null;

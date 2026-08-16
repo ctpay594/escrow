@@ -154,8 +154,9 @@ CREATE TRIGGER merchants_set_updated_at
 -- ========== transfer_batches + transfers ==========
 CREATE TABLE IF NOT EXISTS public.transfer_batches (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  merchant_id UUID NOT NULL REFERENCES public.merchants(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  merchant_id UUID REFERENCES public.merchants(id) ON DELETE CASCADE,
+  source TEXT NOT NULL DEFAULT 'merchant',
   label TEXT,
   total_amount NUMERIC(18, 2) NOT NULL,
   transfer_count INTEGER NOT NULL,
@@ -165,8 +166,9 @@ CREATE TABLE IF NOT EXISTS public.transfer_batches (
 
 CREATE TABLE IF NOT EXISTS public.transfers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-  merchant_id UUID NOT NULL REFERENCES public.merchants(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  merchant_id UUID REFERENCES public.merchants(id) ON DELETE CASCADE,
+  source TEXT NOT NULL DEFAULT 'merchant',
   payout_ref TEXT NOT NULL UNIQUE,
   amount NUMERIC(18, 2) NOT NULL CHECK (amount > 0),
   payout_mode TEXT NOT NULL CHECK (payout_mode IN ('IMPS', 'NEFT', 'RTGS', 'UPI')),
@@ -190,7 +192,26 @@ CREATE TABLE IF NOT EXISTS public.transfers (
 ALTER TABLE public.transfers
   ADD COLUMN IF NOT EXISTS utr TEXT,
   ADD COLUMN IF NOT EXISTS bank_ref TEXT,
-  ADD COLUMN IF NOT EXISTS batch_id UUID REFERENCES public.transfer_batches(id) ON DELETE SET NULL;
+  ADD COLUMN IF NOT EXISTS batch_id UUID REFERENCES public.transfer_batches(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'merchant';
+
+ALTER TABLE public.transfer_batches
+  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'merchant';
+
+ALTER TABLE public.transfers ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE public.transfers ALTER COLUMN merchant_id DROP NOT NULL;
+ALTER TABLE public.transfer_batches ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE public.transfer_batches ALTER COLUMN merchant_id DROP NOT NULL;
+
+ALTER TABLE public.transfers DROP CONSTRAINT IF EXISTS transfers_source_check;
+ALTER TABLE public.transfers
+  ADD CONSTRAINT transfers_source_check
+  CHECK (source IN ('merchant', 'company'));
+
+ALTER TABLE public.transfer_batches DROP CONSTRAINT IF EXISTS transfer_batches_source_check;
+ALTER TABLE public.transfer_batches
+  ADD CONSTRAINT transfer_batches_source_check
+  CHECK (source IN ('merchant', 'company'));
 
 CREATE INDEX IF NOT EXISTS transfers_user_id_idx ON public.transfers (user_id);
 CREATE INDEX IF NOT EXISTS transfers_merchant_id_idx ON public.transfers (merchant_id);

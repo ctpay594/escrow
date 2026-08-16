@@ -1,9 +1,10 @@
 export interface AdminHistoryTransfer {
   id: string;
   kind?: 'payout' | 'deposit';
+  source?: 'merchant' | 'company';
   batch_id: string | null;
-  user_id?: string;
-  merchant_id?: string;
+  user_id?: string | null;
+  merchant_id?: string | null;
   merchant_name?: string;
   username?: string;
   payout_ref: string;
@@ -152,7 +153,15 @@ function transferMatchesSearch(transfer: AdminHistoryTransfer, query: string) {
 
 export function entryMerchantId(entry: AdminHistoryEntry) {
   if (entry.kind === 'batch') {
-    return entry.transfers[0]?.user_id ?? entry.transfers[0]?.merchant_id ?? '';
+    const first = entry.transfers[0];
+    if (first && isCompanyRow(first)) {
+      return 'company';
+    }
+    return first?.user_id ?? first?.merchant_id ?? '';
+  }
+
+  if (isCompanyRow(entry.item)) {
+    return 'company';
   }
 
   return entry.item.user_id ?? entry.item.merchant_id ?? '';
@@ -160,7 +169,19 @@ export function entryMerchantId(entry: AdminHistoryEntry) {
 
 export function entryMerchantLabel(entry: AdminHistoryEntry) {
   const item = entry.kind === 'batch' ? entry.transfers[0] : entry.item;
+  if (item && isCompanyRow(item)) {
+    return 'Company account';
+  }
   return item?.merchant_name || item?.username || 'Unknown merchant';
+}
+
+function isCompanyRow(item: AdminHistoryTransfer) {
+  return (
+    item.source === 'company' ||
+    item.username === 'company' ||
+    item.merchant_name === 'Company account' ||
+    (!item.user_id && !item.merchant_id && item.kind !== 'deposit')
+  );
 }
 
 export function entryMatchesMerchant(entry: AdminHistoryEntry, merchantId: string) {

@@ -12,6 +12,8 @@ import {
 import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
 import { TransfersService, TransferReconcileService } from '../transfers';
 import type { TransferStatus } from '../transfers/transfers.types';
+import { CreateBulkTransferDto } from '../transfers/dto/create-bulk-transfer.dto';
+import { CreateTransferDto } from '../transfers/dto/create-transfer.dto';
 import { AdminJwtAuthGuard } from './admin-jwt-auth.guard';
 import { AdminAuthService, AdminUsersService } from './admin.service';
 import type { AdminJwtPayload } from './admin.types';
@@ -163,6 +165,35 @@ export class AdminTransfersController {
     @Query('user_id') userId?: string,
   ) {
     return this.transfersService.listTransfersForAdmin(status, userId);
+  }
+
+  @Post('company')
+  createCompanyTransfer(@Body() dto: CreateTransferDto) {
+    return this.transfersService.createCompanyTransfer({
+      amount: dto.amount,
+      payoutMode: dto.payout_mode,
+      transactionNote: dto.transaction_note,
+      beneficiaryAccountName: dto.beneficiary_account_name,
+      beneficiaryAccountNo: dto.beneficiary_account_no,
+      beneficiaryIfsc: dto.beneficiary_ifsc,
+      beneficiaryVpa: dto.beneficiary_vpa,
+    });
+  }
+
+  @Post('company/bulk')
+  createCompanyBulkTransfer(@Body() dto: CreateBulkTransferDto) {
+    return this.transfersService.createCompanyBulkTransfer(
+      dto.transfers.map((item) => ({
+        amount: item.amount,
+        payoutMode: item.payout_mode,
+        transactionNote: item.transaction_note,
+        beneficiaryAccountName: item.beneficiary_account_name,
+        beneficiaryAccountNo: item.beneficiary_account_no,
+        beneficiaryIfsc: item.beneficiary_ifsc,
+        beneficiaryVpa: item.beneficiary_vpa,
+      })),
+      dto.label,
+    );
   }
 
   @Post('reconcile-status')

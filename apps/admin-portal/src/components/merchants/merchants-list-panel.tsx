@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronRight, Pencil, Plus, RefreshCw, Search, Users } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
@@ -592,6 +593,9 @@ export function MerchantsListPanel() {
                     .filter(Boolean)
                     .join(' · ')}
             </p>
+            <Button asChild size="sm" variant="outline" className="mt-3 w-full">
+              <Link href="/transfers">Route / Transfer</Link>
+            </Button>
           </GlassCardContent>
         </GlassCard>
       </div>

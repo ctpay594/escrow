@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   ChevronLeft,
   ChevronRight,
@@ -157,13 +158,16 @@ function entryKey(entry: AdminHistoryEntry) {
 }
 
 export function AdminHistoryPanel() {
+  const searchParams = useSearchParams();
   const [transfers, setTransfers] = useState<AdminHistoryTransfer[]>([]);
   const [merchants, setMerchants] = useState<OnboardedMerchant[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [merchantId, setMerchantId] = useState('all');
+  const [merchantId, setMerchantId] = useState(
+    () => searchParams.get('merchant') ?? 'all',
+  );
   const [period, setPeriod] = useState<HistoryPeriod>('7d');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState<HistoryType>('all');
@@ -214,15 +218,16 @@ export function AdminHistoryPanel() {
       }));
       setMerchants(merchantList);
 
-      const payouts = (Array.isArray(transfersData) ? transfersData : []).map(
-        (row: AdminHistoryTransfer) => ({
-          ...row,
-          kind: row.kind ?? 'payout',
-          user_id: row.user_id,
-          merchant_name: row.merchant_name,
-          username: row.username,
-        }),
-      );
+      const payouts: AdminHistoryTransfer[] = (
+        Array.isArray(transfersData) ? transfersData : []
+      ).map((row: AdminHistoryTransfer) => ({
+        ...row,
+        kind: row.kind ?? 'payout',
+        source: row.source === 'company' ? 'company' : 'merchant',
+        user_id: row.user_id,
+        merchant_name: row.merchant_name,
+        username: row.username,
+      }));
 
       const deposits = (
         depositsResponse.ok && Array.isArray(depositsData)
@@ -330,8 +335,10 @@ export function AdminHistoryPanel() {
   const selectedMerchantLabel =
     merchantId === 'all'
       ? 'All onboarded users'
-      : merchants.find((merchant) => merchant.id === merchantId)?.merchant_name ??
-        'Selected merchant';
+      : merchantId === 'company'
+        ? 'Company account'
+        : merchants.find((merchant) => merchant.id === merchantId)?.merchant_name ??
+          'Selected merchant';
 
   const typeLabel: Record<HistoryType, string> = {
     all: 'All types',
@@ -417,6 +424,7 @@ export function AdminHistoryPanel() {
                 </SelectTrigger>
                 <SelectContent className="max-h-72">
                   <SelectItem value="all">All onboarded users</SelectItem>
+                  <SelectItem value="company">Company account</SelectItem>
                   {merchants.map((merchant) => (
                     <SelectItem key={merchant.id} value={merchant.id}>
                       {merchant.merchant_name} · {merchant.username}

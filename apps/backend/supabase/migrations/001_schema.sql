@@ -314,3 +314,56 @@ CREATE UNIQUE INDEX IF NOT EXISTS ledger_entries_reason_ref_unique
   ON public.ledger_entries (reason, ref_id);
 CREATE INDEX IF NOT EXISTS ledger_entries_user_id_idx
   ON public.ledger_entries (user_id, created_at DESC);
+
+-- Lock the merchant row, then add to collected. Stops two deposits at the
+-- same instant from overwriting each other (lost update).
+CREATE OR REPLACE FUNCTION public.credit_merchant_collected(
+  p_user_id uuid,
+  p_amount numeric
+)
+RETURNS TABLE (
+  real_before numeric,
+  real_after numeric,
+  pending_balance numeric,
+  demo_balance numeric,
+  balance_mode text
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  locked public.merchants%ROWTYPE;
+  next_real numeric;
+  next_available numeric;
+BEGIN
+  SELECT * INTO locked
+  FROM public.merchants
+  WHERE user_id = p_user_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'merchant not found';
+  END IF;
+
+  next_real := ROUND(COALESCE(locked.real_balance, 0) + p_amount, 2);
+
+  IF COALESCE(locked.balance_mode, 'demo') = 'real' THEN
+    next_available := GREATEST(next_real - COALESCE(locked.pending_balance, 0), 0);
+  ELSE
+    next_available := COALESCE(locked.demo_balance, 0);
+  END IF;
+
+  UPDATE public.merchants
+  SET
+    real_balance = next_real,
+    available_balance = next_available
+  WHERE id = locked.id;
+
+  RETURN QUERY
+  SELECT
+    COALESCE(locked.real_balance, 0),
+    next_real,
+    COALESCE(locked.pending_balance, 0),
+    COALESCE(locked.demo_balance, 0),
+    COALESCE(locked.balance_mode, 'demo');
+END;
+$$;

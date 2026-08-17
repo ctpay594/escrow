@@ -29,11 +29,19 @@ const MERCHANT_PROFILE_BASIC_SELECT =
 @Injectable()
 export class MerchantsService {
   private readonly logger = new Logger(MerchantsService.name);
+  private readonly collectCreditTail = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
   ) {}
+
+  private enqueueCollectCredit<T>(userId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.collectCreditTail.get(userId) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    this.collectCreditTail.set(userId, next);
+    return next;
+  }
 
   getPlatformCredentials(): { apiKey: string; privateKey: string } {
     const apiKey = this.configService.get<string>('ESCROWSTACK_API_KEY')?.trim();
@@ -1324,6 +1332,23 @@ export class MerchantsService {
       return { outcome: 'merchant_not_found' };
     }
 
+    return this.enqueueCollectCredit(merchant.userId, () =>
+      this.creditCollectDepositLocked(merchant, input),
+    );
+  }
+
+  private async creditCollectDepositLocked(
+    merchant: { userId: string; merchantId: string },
+    input: {
+      amount: number;
+      dedupeKey: string;
+      utr: string | null;
+      remitterName: string | null;
+      remitterAccount: string | null;
+      callbackId: string | null;
+      virtualAccount: string;
+    },
+  ): Promise<{ outcome: string; merchantId?: string }> {
     const client = this.supabaseService.getAdminClient();
     const { error: insertError } = await client.from('deposits').insert({
       callback_id: input.callbackId,
@@ -1348,9 +1373,10 @@ export class MerchantsService {
       );
     }
 
-    const balanceMap = await this.loadBalanceMapByUserIds([merchant.userId]);
-    const currentReal = balanceMap.get(merchant.userId)?.real_balance ?? 0;
-    const nextReal = Number((currentReal + input.amount).toFixed(2));
+    const credited = await this.addCollectedBalance(
+      merchant.userId,
+      input.amount,
+    );
     const ledger = await this.getLedgerByUserId(merchant.userId);
 
     if (ledger) {
@@ -1362,12 +1388,12 @@ export class MerchantsService {
         reason: 'deposit',
         refId: input.dedupeKey,
         note: input.utr ? `UTR ${input.utr}` : undefined,
-        realBefore: currentReal,
-        realAfter: nextReal,
-        pendingBefore: ledger.pendingBalance,
-        pendingAfter: ledger.pendingBalance,
+        realBefore: credited.realBefore,
+        realAfter: credited.realAfter,
+        pendingBefore: credited.pendingBalance,
+        pendingAfter: credited.pendingBalance,
         availableAfter: Number(
-          Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2),
+          Math.max(credited.realAfter - credited.pendingBalance, 0).toFixed(2),
         ),
       });
 
@@ -1376,11 +1402,155 @@ export class MerchantsService {
       }
     }
 
-    await this.updateRealBalanceByUserId(merchant.userId, nextReal);
-
     return {
       outcome: 'credited',
       merchantId: merchant.merchantId,
+    };
+  }
+
+  async applyCollectedCorrection(input: {
+    userId: string;
+    amount: number;
+    refId: string;
+    note: string;
+  }): Promise<{ applied: boolean; realAfter: number }> {
+    const ledger = await this.getLedgerByUserId(input.userId);
+
+    if (!ledger) {
+      throw new NotFoundException('Merchant profile not found');
+    }
+
+    const claimed = await this.claimLedgerEvent({
+      userId: input.userId,
+      merchantId: ledger.merchantId,
+      direction: 'credit',
+      amount: input.amount,
+      reason: 'balance_correction',
+      refId: input.refId,
+      note: input.note,
+      realBefore: ledger.realBalance,
+      realAfter: Number((ledger.realBalance + input.amount).toFixed(2)),
+      pendingBefore: ledger.pendingBalance,
+      pendingAfter: ledger.pendingBalance,
+      availableAfter: Number(
+        Math.max(
+          ledger.realBalance + input.amount - ledger.pendingBalance,
+          0,
+        ).toFixed(2),
+      ),
+    });
+
+    if (!claimed) {
+      return { applied: false, realAfter: ledger.realBalance };
+    }
+
+    const credited = await this.addCollectedBalance(input.userId, input.amount);
+
+    return { applied: true, realAfter: credited.realAfter };
+  }
+
+  private async addCollectedBalance(
+    userId: string,
+    amount: number,
+  ): Promise<{
+    realBefore: number;
+    realAfter: number;
+    pendingBalance: number;
+  }> {
+    const fromRpc = await this.addCollectedBalanceViaLock(userId, amount);
+
+    if (fromRpc) {
+      return fromRpc;
+    }
+
+    const client = this.supabaseService.getAdminClient();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const current = await this.getLedgerByUserId(userId);
+
+      if (!current) {
+        throw new NotFoundException('Merchant profile not found');
+      }
+
+      const realBefore = current.realBalance;
+      const realAfter = Number((realBefore + amount).toFixed(2));
+      const availableAfter = this.resolveAvailableBalance(
+        realAfter,
+        current.demoBalance,
+        current.pendingBalance,
+        current.balanceMode,
+      );
+
+      const { data, error } = await client
+        .from('merchants')
+        .update({
+          real_balance: realAfter,
+          available_balance: availableAfter,
+        })
+        .eq('user_id', userId)
+        .eq('real_balance', realBefore)
+        .select('real_balance, pending_balance')
+        .maybeSingle();
+
+      if (error) {
+        throw new InternalServerErrorException(
+          error.message ?? 'Failed to credit collected balance',
+        );
+      }
+
+      if (data) {
+        return {
+          realBefore,
+          realAfter: Number(data.real_balance),
+          pendingBalance: Number(data.pending_balance ?? 0),
+        };
+      }
+    }
+
+    throw new InternalServerErrorException(
+      'Failed to credit collected balance after concurrent updates',
+    );
+  }
+
+  private async addCollectedBalanceViaLock(
+    userId: string,
+    amount: number,
+  ): Promise<{
+    realBefore: number;
+    realAfter: number;
+    pendingBalance: number;
+  } | null> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .rpc('credit_merchant_collected', {
+        p_user_id: userId,
+        p_amount: amount,
+      });
+
+    if (error) {
+      if (
+        error.message.toLowerCase().includes('credit_merchant_collected') ||
+        error.code === 'PGRST202' ||
+        error.code === '42883'
+      ) {
+        return null;
+      }
+
+      throw new InternalServerErrorException(
+        error.message ?? 'Failed to credit collected balance',
+      );
+    }
+
+    const row = Array.isArray(data) ? data[0] : data;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      realBefore: Number(row.real_before),
+      realAfter: Number(row.real_after),
+      pendingBalance: Number(row.pending_balance ?? 0),
     };
   }
 
@@ -1488,7 +1658,7 @@ export class MerchantsService {
       )
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
-      .limit(200);
+      .limit(2000);
 
     if (error) {
       if (this.isMissingLedgerTable(error.message, error.code)) {

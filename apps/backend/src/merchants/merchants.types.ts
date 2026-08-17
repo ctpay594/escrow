@@ -79,7 +79,8 @@ export type LedgerReason =
   | 'payout_success'
   | 'payout_release'
   | 'payout_bank_reversal'
-  | 'demo_adjust';
+  | 'demo_adjust'
+  | 'balance_correction';
 
 export interface LedgerMutationRef {
   reason: LedgerReason;

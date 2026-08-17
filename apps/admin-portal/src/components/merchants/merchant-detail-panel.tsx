@@ -19,6 +19,7 @@ import {
 } from '@/components/merchants/balance-mode-toggle';
 import { CopyField } from '@/components/shared/copy-field';
 import { ErrorCard } from '@/components/shared/page-header';
+import { BalanceLogPanel, type LedgerEntry } from '@/components/merchants/balance-log-panel';
 import { MerchantTransfersPanel } from '@/components/merchants/merchant-transfers-panel';
 import {
   SeriousConfirmDialog,
@@ -56,27 +57,6 @@ interface ManagedMerchant {
   account_status: MerchantAccountStatus;
   created_at?: string;
 }
-
-interface LedgerEntry {
-  id: string;
-  direction: 'credit' | 'debit';
-  amount: number;
-  reason: string;
-  ref_id: string;
-  note: string | null;
-  real_before: number | null;
-  real_after: number | null;
-  created_at: string;
-}
-
-const LEDGER_REASON_LABELS: Record<string, string> = {
-  deposit: 'Deposit credited',
-  payout_hold: 'Transfer hold',
-  payout_success: 'Payout success',
-  payout_release: 'Hold released',
-  payout_bank_reversal: 'Bank reversal',
-  demo_adjust: 'Demo balance edit',
-};
 
 interface MerchantDetailPanelProps {
   merchantId: string;
@@ -711,72 +691,7 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
         </GlassCardContent>
       </GlassCard>
 
-      <GlassCard>
-        <GlassCardHeader>
-          <GlassCardTitle>Balance log</GlassCardTitle>
-        </GlassCardHeader>
-        <GlassCardContent>
-          <p className="px-4 pb-2 text-xs text-muted-foreground">
-            Every credit or debit from now on is recorded with a reason and
-            time. History still shows transfers and deposits; this log is the
-            audit trail so the same payout cannot debit twice.
-          </p>
-          {ledger.length === 0 ? (
-            <p className="px-4 pb-4 text-sm text-muted-foreground">
-              No log rows yet. Run the ledger_entries SQL, then new balance
-              changes will appear here.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="px-4 py-2 font-medium">When</th>
-                    <th className="px-4 py-2 font-medium">Why</th>
-                    <th className="px-4 py-2 font-medium">Amount</th>
-                    <th className="px-4 py-2 font-medium">Real after</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ledger.map((entry) => (
-                    <tr key={entry.id} className="border-b last:border-0">
-                      <td className="whitespace-nowrap px-4 py-2 text-xs">
-                        {new Date(entry.created_at).toLocaleString('en-IN', {
-                          timeZone: 'Asia/Kolkata',
-                        })}
-                      </td>
-                      <td className="px-4 py-2">
-                        {LEDGER_REASON_LABELS[entry.reason] ?? entry.reason}
-                        {entry.note ? (
-                          <span className="block text-xs text-muted-foreground">
-                            {entry.note}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td
-                        className={cn(
-                          'px-4 py-2 font-medium',
-                          entry.direction === 'credit'
-                            ? 'text-emerald-600'
-                            : 'text-red-600',
-                        )}
-                      >
-                        {entry.direction === 'credit' ? '+' : '-'}
-                        {formatCurrency(entry.amount)}
-                      </td>
-                      <td className="px-4 py-2">
-                        {entry.real_after == null
-                          ? '—'
-                          : formatCurrency(entry.real_after)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </GlassCardContent>
-      </GlassCard>
+      <BalanceLogPanel ledger={ledger} />
 
       <MerchantTransfersPanel
         merchantId={merchant.id}

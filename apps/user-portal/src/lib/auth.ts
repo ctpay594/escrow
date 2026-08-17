@@ -1,14 +1,13 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { backendFetch } from './api';
+import { backendFetch, BackendRequestError } from './api';
 import { SESSION_COOKIE } from './constants';
+import type { MerchantAccountStatus } from './types';
 
 export interface SessionUser {
   id: string;
   username: string;
 }
-
-import type { MerchantAccountStatus } from './types';
 
 export interface MerchantProfile {
   merchant_name: string;
@@ -26,31 +25,47 @@ export interface UserProfile {
   merchant: MerchantProfile | null;
 }
 
-export async function getUserProfile(): Promise<UserProfile | null> {
+function sessionHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+    'x-session-token': token,
+  };
+}
+
+export async function getSessionToken(): Promise<string | null> {
   const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  const token = cookieStore.get(SESSION_COOKIE)?.value?.trim();
+  return token || null;
+}
+
+export async function getUserProfile(): Promise<UserProfile | null> {
+  const token = await getSessionToken();
 
   if (!token) {
     return null;
   }
 
-  try {
-    return await backendFetch<UserProfile>('/auth/me', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  } catch {
-    return null;
-  }
+  return backendFetch<UserProfile>('/auth/me', {
+    headers: sessionHeaders(token),
+  });
 }
 
 export async function requireUserProfile(): Promise<UserProfile> {
-  const profile = await getUserProfile();
+  const token = await getSessionToken();
 
-  if (!profile) {
-    redirect('/api/auth/logout?redirect=/login');
+  if (!token) {
+    redirect('/login');
   }
 
-  return profile;
+  try {
+    return await backendFetch<UserProfile>('/auth/me', {
+      headers: sessionHeaders(token),
+    });
+  } catch (error) {
+    if (error instanceof BackendRequestError && error.status === 401) {
+      redirect('/api/auth/logout?redirect=/login');
+    }
+
+    throw error;
+  }
 }

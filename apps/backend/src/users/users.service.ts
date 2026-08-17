@@ -16,7 +16,7 @@ export class UsersService {
       .getAdminClient()
       .from('users')
       .select('*')
-      .eq('username', username)
+      .ilike('username', this.escapeIlikeExact(username.trim()))
       .maybeSingle();
 
     if (error) {
@@ -136,5 +136,9 @@ export class UsersService {
     }
 
     return data;
+  }
+
+  private escapeIlikeExact(value: string) {
+    return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
   }
 }

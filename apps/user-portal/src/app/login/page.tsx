@@ -13,7 +13,13 @@ import { glassAppBackground } from '@/lib/glass-styles';
 import { cn } from '@/lib/utils';
 
 export default async function LoginPage() {
-  const profile = await getUserProfile();
+  let profile = null;
+
+  try {
+    profile = await getUserProfile();
+  } catch {
+    profile = null;
+  }
 
   if (profile) {
     redirect('/');

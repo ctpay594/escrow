@@ -192,8 +192,11 @@ export function AccountDashboard({
 
     try {
       const [profileResponse] = await Promise.all([
-        fetch('/api/auth/me', { cache: 'no-store' }),
-        fetch('/api/transfers/reconcile-status', { method: 'POST' }),
+        fetch('/api/auth/me', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/transfers/reconcile-status', {
+          method: 'POST',
+          credentials: 'include',
+        }),
       ]);
 
       const profileData = await profileResponse.json();

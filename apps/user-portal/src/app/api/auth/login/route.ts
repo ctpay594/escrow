@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { backendFetch } from '@/lib/api';
+import { backendFetch, BackendRequestError } from '@/lib/api';
 import { SESSION_COOKIE } from '@/lib/constants';
 import { SESSION_COOKIE_OPTIONS } from '@/lib/session-cookie';
 
@@ -14,7 +14,11 @@ export async function POST(request: Request) {
   try {
     const data = await backendFetch<AuthResponse>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        username:
+          typeof body.username === 'string' ? body.username.trim() : body.username,
+        password: body.password,
+      }),
     });
 
     const response = NextResponse.json({ user: data.user });
@@ -24,7 +28,9 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Login failed';
+    const status =
+      error instanceof BackendRequestError ? error.status : 401;
 
-    return NextResponse.json({ message }, { status: 401 });
+    return NextResponse.json({ message }, { status });
   }
 }

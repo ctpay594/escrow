@@ -11,8 +11,7 @@ function withNoIndex(response: NextResponse) {
 function isPublicPath(pathname: string): boolean {
   return (
     pathname === '/login' ||
-    pathname.startsWith('/api/auth/login') ||
-    pathname.startsWith('/api/auth/logout')
+    pathname.startsWith('/api/')
   );
 }
 

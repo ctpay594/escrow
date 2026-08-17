@@ -25,7 +25,7 @@ export function AdminLoginForm() {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username: username.trim(), password }),
       });
 
       const data = await response.json();
@@ -56,6 +56,9 @@ export function AdminLoginForm() {
           id="username"
           name="username"
           autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           required
           minLength={3}
           value={username}

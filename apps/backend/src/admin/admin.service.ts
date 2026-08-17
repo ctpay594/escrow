@@ -23,7 +23,7 @@ export class AdminAuthService {
   ) {}
 
   async login(dto: AdminLoginDto): Promise<AdminAuthResponse> {
-    const admin = await this.adminsService.findByUsername(dto.username);
+    const admin = await this.adminsService.findByUsername(dto.username.trim());
 
     if (!admin || admin.password !== dto.password) {
       throw new UnauthorizedException('Invalid username or password');

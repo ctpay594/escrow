@@ -39,8 +39,13 @@ export class AdminJwtAuthGuard implements CanActivate {
   private extractToken(request: Request): string | null {
     const authorization = request.headers.authorization;
 
-    if (authorization?.startsWith('Bearer ')) {
-      return authorization.slice(7);
+    if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
+      return authorization.slice(7).trim() || null;
+    }
+
+    const headerToken = request.headers['x-session-token'];
+    if (typeof headerToken === 'string' && headerToken.trim()) {
+      return headerToken.trim();
     }
 
     return null;

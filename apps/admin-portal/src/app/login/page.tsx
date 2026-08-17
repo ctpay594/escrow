@@ -15,7 +15,13 @@ import { cn } from '@/lib/utils';
 import { AdminLoginForm } from './admin-login-form';
 
 export default async function AdminLoginPage() {
-  const admin = await getAdminSession();
+  let admin = null;
+
+  try {
+    admin = await getAdminSession();
+  } catch {
+    admin = null;
+  }
 
   if (admin) {
     redirect('/');

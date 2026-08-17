@@ -24,7 +24,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<AuthResponse> {
-    const user = await this.usersService.findByUsername(dto.username);
+    const user = await this.usersService.findByUsername(dto.username.trim());
 
     if (!user || user.password !== dto.password) {
       throw new UnauthorizedException('Invalid username or password');

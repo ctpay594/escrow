@@ -23,6 +23,7 @@ export async function backendFetch<T>(
     headers.set('Content-Type', 'application/json');
   }
 
+  // Duplicate JWT on x-session-token so nginx dropping Authorization still authenticates.
   const authorization = headers.get('Authorization') ?? headers.get('authorization');
   if (authorization?.startsWith('Bearer ') && !headers.has('x-session-token')) {
     headers.set('x-session-token', authorization.slice(7).trim());

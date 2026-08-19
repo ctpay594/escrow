@@ -36,6 +36,9 @@ export async function backendFetch<T>(
       ...init,
       headers,
       cache: 'no-store',
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(8000)])
+        : AbortSignal.timeout(8000),
     });
   } catch {
     throw new BackendRequestError(

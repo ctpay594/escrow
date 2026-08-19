@@ -15,6 +15,28 @@ function sessionHeaders(token: string) {
   };
 }
 
+function sessionFromJwt(token: string): AdminSession | null {
+  const parts = token.split('.');
+
+  if (parts.length < 2) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(
+      Buffer.from(parts[1], 'base64url').toString('utf8'),
+    ) as { sub?: unknown; username?: unknown };
+
+    if (typeof payload.sub === 'string' && typeof payload.username === 'string') {
+      return { id: payload.sub, username: payload.username };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export async function getAdminSession(): Promise<AdminSession | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(ADMIN_SESSION_COOKIE)?.value?.trim();
@@ -23,11 +45,19 @@ export async function getAdminSession(): Promise<AdminSession | null> {
     return null;
   }
 
-  const data = await backendFetch<{ admin: AdminSession }>('/admin/auth/me', {
-    headers: sessionHeaders(token),
-  });
+  try {
+    const data = await backendFetch<{ admin: AdminSession }>('/admin/auth/me', {
+      headers: sessionHeaders(token),
+    });
 
-  return data.admin;
+    return data.admin;
+  } catch (error) {
+    if (error instanceof BackendRequestError && error.status === 401) {
+      return null;
+    }
+
+    return sessionFromJwt(token);
+  }
 }
 
 export async function requireAdminSession(): Promise<AdminSession> {
@@ -47,6 +77,12 @@ export async function requireAdminSession(): Promise<AdminSession> {
   } catch (error) {
     if (error instanceof BackendRequestError && error.status === 401) {
       redirect('/api/auth/logout?redirect=/login');
+    }
+
+    const fallback = sessionFromJwt(token);
+
+    if (fallback) {
+      return fallback;
     }
 
     throw error;

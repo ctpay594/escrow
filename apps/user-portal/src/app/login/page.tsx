@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
-import { getUserProfile } from '@/lib/auth';
+import { getSessionToken, getUserProfile, profileFromJwt } from '@/lib/auth';
 import { CTPayLogo } from '@/components/ctpay-logo';
 import { LoginForm } from './login-form';
 import {
@@ -18,7 +18,8 @@ export default async function LoginPage() {
   try {
     profile = await getUserProfile();
   } catch {
-    profile = null;
+    const token = await getSessionToken();
+    profile = token ? profileFromJwt(token) : null;
   }
 
   if (profile) {

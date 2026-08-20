@@ -367,3 +367,11 @@ BEGIN
     COALESCE(locked.balance_mode, 'demo');
 END;
 $$;
+
+-- Watermarks so reconcile jobs only scan since last good check.
+CREATE TABLE IF NOT EXISTS public.system_watermarks (
+  key TEXT PRIMARY KEY,
+  checked_at TIMESTAMPTZ NOT NULL,
+  meta JSONB,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -29,17 +29,27 @@ const MERCHANT_PROFILE_BASIC_SELECT =
 @Injectable()
 export class MerchantsService {
   private readonly logger = new Logger(MerchantsService.name);
-  private readonly collectCreditTail = new Map<string, Promise<unknown>>();
+  /** Serializes deposit/hold/success/release per merchant (same process). */
+  private readonly merchantLedgerTail = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
   ) {}
 
-  private enqueueCollectCredit<T>(userId: string, task: () => Promise<T>): Promise<T> {
-    const previous = this.collectCreditTail.get(userId) ?? Promise.resolve();
+  private enqueueMerchantLedger<T>(
+    userId: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.merchantLedgerTail.get(userId) ?? Promise.resolve();
     const next = previous.then(task, task);
-    this.collectCreditTail.set(userId, next);
+    this.merchantLedgerTail.set(
+      userId,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
     return next;
   }
 
@@ -957,31 +967,37 @@ export class MerchantsService {
     amount: number,
     _ledgerSnapshot?: {
       merchantId?: string;
-      balanceMode: 'real' | 'demo';
-      realBalance: number;
-      demoBalance: number;
-      pendingBalance: number;
-      spendable: number;
+      balanceMode?: 'real' | 'demo';
+      realBalance?: number;
+      demoBalance?: number;
+      pendingBalance?: number;
+      spendable?: number;
     },
     ref?: LedgerMutationRef,
   ): Promise<void> {
-    const ledger = await this.getLedgerByUserId(userId);
+    return this.enqueueMerchantLedger(userId, () =>
+      this.holdFundsForTransferLocked(userId, amount, ref),
+    );
+  }
 
-    if (!ledger) {
-      throw new NotFoundException('Merchant profile not found');
-    }
-
-    if (ledger.spendable < amount) {
-      throw new BadRequestException('Insufficient available balance');
-    }
-
-    const nextPending = Number((ledger.pendingBalance + amount).toFixed(2));
-    const nextAvailable =
-      ledger.balanceMode === 'real'
-        ? Number(Math.max(ledger.realBalance - nextPending, 0).toFixed(2))
-        : Number((ledger.demoBalance - amount).toFixed(2));
-
+  private async holdFundsForTransferLocked(
+    userId: string,
+    amount: number,
+    ref?: LedgerMutationRef,
+  ): Promise<void> {
     if (ref) {
+      const ledger = await this.getLedgerByUserId(userId);
+      if (!ledger) {
+        throw new NotFoundException('Merchant profile not found');
+      }
+      if (ledger.spendable < amount) {
+        throw new BadRequestException('Insufficient available balance');
+      }
+      const nextPending = Number((ledger.pendingBalance + amount).toFixed(2));
+      const nextAvailable =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(ledger.realBalance - nextPending, 0).toFixed(2))
+          : Number((ledger.demoBalance - amount).toFixed(2));
       const claimed = await this.claimLedgerEvent({
         userId,
         merchantId: ledger.merchantId,
@@ -996,21 +1012,71 @@ export class MerchantsService {
         pendingAfter: nextPending,
         availableAfter: nextAvailable,
       });
-
       if (!claimed) {
         return;
       }
     }
 
-    if (ledger.balanceMode === 'real') {
-      const { error } = await this.supabaseService
-        .getAdminClient()
+    const client = this.supabaseService.getAdminClient();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const ledger = await this.getLedgerByUserId(userId);
+
+      if (!ledger) {
+        throw new NotFoundException('Merchant profile not found');
+      }
+
+      if (ledger.spendable < amount) {
+        throw new BadRequestException('Insufficient available balance');
+      }
+
+      const pendingBefore = ledger.pendingBalance;
+      const nextPending = Number((pendingBefore + amount).toFixed(2));
+      const nextAvailable =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(ledger.realBalance - nextPending, 0).toFixed(2))
+          : Number((ledger.demoBalance - amount).toFixed(2));
+
+      if (ledger.balanceMode === 'real') {
+        const { data, error } = await client
+          .from('merchants')
+          .update({
+            pending_balance: nextPending,
+            available_balance: nextAvailable,
+          })
+          .eq('user_id', userId)
+          .eq('pending_balance', pendingBefore)
+          .eq('real_balance', ledger.realBalance)
+          .select('id')
+          .maybeSingle();
+
+        if (error) {
+          throw new InternalServerErrorException(
+            'Failed to reserve transfer funds',
+          );
+        }
+
+        if (data) {
+          return;
+        }
+
+        continue;
+      }
+
+      const demoBefore = ledger.demoBalance;
+      const nextDemo = Number((demoBefore - amount).toFixed(2));
+      const { data, error } = await client
         .from('merchants')
         .update({
+          demo_balance: nextDemo,
+          available_balance: nextDemo,
           pending_balance: nextPending,
-          available_balance: nextAvailable,
         })
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .eq('pending_balance', pendingBefore)
+        .eq('demo_balance', demoBefore)
+        .select('id')
+        .maybeSingle();
 
       if (error) {
         throw new InternalServerErrorException(
@@ -1018,25 +1084,14 @@ export class MerchantsService {
         );
       }
 
-      return;
+      if (data) {
+        return;
+      }
     }
 
-    const nextDemo = Number((ledger.demoBalance - amount).toFixed(2));
-    const { error } = await this.supabaseService
-      .getAdminClient()
-      .from('merchants')
-      .update({
-        demo_balance: nextDemo,
-        available_balance: nextDemo,
-        pending_balance: nextPending,
-      })
-      .eq('user_id', userId);
-
-    if (error) {
-      throw new InternalServerErrorException(
-        'Failed to reserve transfer funds',
-      );
-    }
+    throw new InternalServerErrorException(
+      'Failed to reserve transfer funds after concurrent updates',
+    );
   }
 
   async clearPendingForSuccessfulTransfer(
@@ -1044,25 +1099,32 @@ export class MerchantsService {
     amount: number,
     ref?: LedgerMutationRef,
   ): Promise<void> {
-    const ledger = await this.getLedgerByUserId(userId);
-
-    if (!ledger) {
-      return;
-    }
-
-    const nextPending = Number(
-      Math.max(ledger.pendingBalance - amount, 0).toFixed(2),
+    return this.enqueueMerchantLedger(userId, () =>
+      this.clearPendingForSuccessfulTransferLocked(userId, amount, ref),
     );
-    const nextReal =
-      ledger.balanceMode === 'real'
-        ? Number(Math.max(ledger.realBalance - amount, 0).toFixed(2))
-        : ledger.realBalance;
-    const nextAvailable =
-      ledger.balanceMode === 'real'
-        ? Number(Math.max(nextReal - nextPending, 0).toFixed(2))
-        : ledger.spendable;
+  }
 
+  private async clearPendingForSuccessfulTransferLocked(
+    userId: string,
+    amount: number,
+    ref?: LedgerMutationRef,
+  ): Promise<void> {
     if (ref) {
+      const ledger = await this.getLedgerByUserId(userId);
+      if (!ledger) {
+        return;
+      }
+      const nextPending = Number(
+        Math.max(ledger.pendingBalance - amount, 0).toFixed(2),
+      );
+      const nextReal =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(ledger.realBalance - amount, 0).toFixed(2))
+          : ledger.realBalance;
+      const nextAvailable =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(nextReal - nextPending, 0).toFixed(2))
+          : ledger.spendable;
       const claimed = await this.claimLedgerEvent({
         userId,
         merchantId: ledger.merchantId,
@@ -1077,7 +1139,6 @@ export class MerchantsService {
         pendingAfter: nextPending,
         availableAfter: nextAvailable,
       });
-
       if (!claimed) {
         this.logger.warn(
           `Skip duplicate success debit for ${userId} ref ${ref.refId}`,
@@ -1086,23 +1147,68 @@ export class MerchantsService {
       }
     }
 
-    if (ledger.pendingBalance + 0.001 < amount) {
-      this.logger.warn(
-        `Skip duplicate success debit for ${userId}: pending ${ledger.pendingBalance} < ${amount}`,
-      );
-      return;
-    }
+    const client = this.supabaseService.getAdminClient();
 
-    if (ledger.balanceMode === 'real') {
-      const { error } = await this.supabaseService
-        .getAdminClient()
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const ledger = await this.getLedgerByUserId(userId);
+
+      if (!ledger) {
+        return;
+      }
+
+      if (ledger.pendingBalance + 0.001 < amount) {
+        this.logger.warn(
+          `Skip success debit for ${userId}: pending ${ledger.pendingBalance} < ${amount}`,
+        );
+        return;
+      }
+
+      const pendingBefore = ledger.pendingBalance;
+      const realBefore = ledger.realBalance;
+      const nextPending = Number(Math.max(pendingBefore - amount, 0).toFixed(2));
+      const nextReal =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(realBefore - amount, 0).toFixed(2))
+          : realBefore;
+      const nextAvailable =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(nextReal - nextPending, 0).toFixed(2))
+          : ledger.spendable;
+
+      if (ledger.balanceMode === 'real') {
+        const { data, error } = await client
+          .from('merchants')
+          .update({
+            real_balance: nextReal,
+            pending_balance: nextPending,
+            available_balance: nextAvailable,
+          })
+          .eq('user_id', userId)
+          .eq('pending_balance', pendingBefore)
+          .eq('real_balance', realBefore)
+          .select('id')
+          .maybeSingle();
+
+        if (error) {
+          throw new InternalServerErrorException(
+            'Failed to finalize successful transfer balance',
+          );
+        }
+
+        if (data) {
+          return;
+        }
+
+        continue;
+      }
+
+      const { data, error } = await client
         .from('merchants')
-        .update({
-          real_balance: nextReal,
-          pending_balance: nextPending,
-          available_balance: nextAvailable,
-        })
-        .eq('user_id', userId);
+        .update({ pending_balance: nextPending })
+        .eq('user_id', userId)
+        .eq('pending_balance', pendingBefore)
+        .select('id')
+        .maybeSingle();
 
       if (error) {
         throw new InternalServerErrorException(
@@ -1110,20 +1216,14 @@ export class MerchantsService {
         );
       }
 
-      return;
+      if (data) {
+        return;
+      }
     }
 
-    const { error } = await this.supabaseService
-      .getAdminClient()
-      .from('merchants')
-      .update({ pending_balance: nextPending })
-      .eq('user_id', userId);
-
-    if (error) {
-      throw new InternalServerErrorException(
-        'Failed to finalize successful transfer balance',
-      );
-    }
+    throw new InternalServerErrorException(
+      'Failed to finalize successful transfer after concurrent updates',
+    );
   }
 
   async releaseHeldFunds(
@@ -1131,25 +1231,32 @@ export class MerchantsService {
     amount: number,
     ref?: LedgerMutationRef,
   ): Promise<void> {
-    const ledger = await this.getLedgerByUserId(userId);
-
-    if (!ledger) {
-      return;
-    }
-
-    const nextPending = Number(
-      Math.max(ledger.pendingBalance - amount, 0).toFixed(2),
+    return this.enqueueMerchantLedger(userId, () =>
+      this.releaseHeldFundsLocked(userId, amount, ref),
     );
-    const nextDemo =
-      ledger.balanceMode === 'demo'
-        ? Number((ledger.demoBalance + amount).toFixed(2))
-        : ledger.demoBalance;
-    const nextAvailable =
-      ledger.balanceMode === 'real'
-        ? Number(Math.max(ledger.realBalance - nextPending, 0).toFixed(2))
-        : nextDemo;
+  }
 
+  private async releaseHeldFundsLocked(
+    userId: string,
+    amount: number,
+    ref?: LedgerMutationRef,
+  ): Promise<void> {
     if (ref) {
+      const ledger = await this.getLedgerByUserId(userId);
+      if (!ledger) {
+        return;
+      }
+      const nextPending = Number(
+        Math.max(ledger.pendingBalance - amount, 0).toFixed(2),
+      );
+      const nextDemo =
+        ledger.balanceMode === 'demo'
+          ? Number((ledger.demoBalance + amount).toFixed(2))
+          : ledger.demoBalance;
+      const nextAvailable =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(ledger.realBalance - nextPending, 0).toFixed(2))
+          : nextDemo;
       const claimed = await this.claimLedgerEvent({
         userId,
         merchantId: ledger.merchantId,
@@ -1164,42 +1271,77 @@ export class MerchantsService {
         pendingAfter: nextPending,
         availableAfter: nextAvailable,
       });
-
       if (!claimed) {
         return;
       }
     }
 
-    if (ledger.balanceMode === 'real') {
-      const { error } = await this.supabaseService
-        .getAdminClient()
+    const client = this.supabaseService.getAdminClient();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const ledger = await this.getLedgerByUserId(userId);
+
+      if (!ledger) {
+        return;
+      }
+
+      const pendingBefore = ledger.pendingBalance;
+      const nextPending = Number(Math.max(pendingBefore - amount, 0).toFixed(2));
+
+      if (ledger.balanceMode === 'real') {
+        const nextAvailable = Number(
+          Math.max(ledger.realBalance - nextPending, 0).toFixed(2),
+        );
+        const { data, error } = await client
+          .from('merchants')
+          .update({
+            pending_balance: nextPending,
+            available_balance: nextAvailable,
+          })
+          .eq('user_id', userId)
+          .eq('pending_balance', pendingBefore)
+          .eq('real_balance', ledger.realBalance)
+          .select('id')
+          .maybeSingle();
+
+        if (error) {
+          throw new InternalServerErrorException('Failed to release held funds');
+        }
+
+        if (data) {
+          return;
+        }
+
+        continue;
+      }
+
+      const demoBefore = ledger.demoBalance;
+      const nextDemo = Number((demoBefore + amount).toFixed(2));
+      const { data, error } = await client
         .from('merchants')
         .update({
+          demo_balance: nextDemo,
+          available_balance: nextDemo,
           pending_balance: nextPending,
-          available_balance: nextAvailable,
         })
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .eq('pending_balance', pendingBefore)
+        .eq('demo_balance', demoBefore)
+        .select('id')
+        .maybeSingle();
 
       if (error) {
         throw new InternalServerErrorException('Failed to release held funds');
       }
 
-      return;
+      if (data) {
+        return;
+      }
     }
 
-    const { error } = await this.supabaseService
-      .getAdminClient()
-      .from('merchants')
-      .update({
-        demo_balance: nextDemo,
-        available_balance: nextDemo,
-        pending_balance: nextPending,
-      })
-      .eq('user_id', userId);
-
-    if (error) {
-      throw new InternalServerErrorException('Failed to release held funds');
-    }
+    throw new InternalServerErrorException(
+      'Failed to release held funds after concurrent updates',
+    );
   }
 
   async creditBackAfterBankFailure(
@@ -1207,26 +1349,33 @@ export class MerchantsService {
     amount: number,
     ref?: LedgerMutationRef,
   ): Promise<void> {
-    const ledger = await this.getLedgerByUserId(userId);
+    return this.enqueueMerchantLedger(userId, () =>
+      this.creditBackAfterBankFailureLocked(userId, amount, ref),
+    );
+  }
 
-    if (!ledger) {
-      return;
-    }
-
-    const nextReal =
-      ledger.balanceMode === 'real'
-        ? Number((ledger.realBalance + amount).toFixed(2))
-        : ledger.realBalance;
-    const nextDemo =
-      ledger.balanceMode === 'demo'
-        ? Number((ledger.demoBalance + amount).toFixed(2))
-        : ledger.demoBalance;
-    const nextAvailable =
-      ledger.balanceMode === 'real'
-        ? Number(Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2))
-        : nextDemo;
-
+  private async creditBackAfterBankFailureLocked(
+    userId: string,
+    amount: number,
+    ref?: LedgerMutationRef,
+  ): Promise<void> {
     if (ref) {
+      const ledger = await this.getLedgerByUserId(userId);
+      if (!ledger) {
+        return;
+      }
+      const nextReal =
+        ledger.balanceMode === 'real'
+          ? Number((ledger.realBalance + amount).toFixed(2))
+          : ledger.realBalance;
+      const nextDemo =
+        ledger.balanceMode === 'demo'
+          ? Number((ledger.demoBalance + amount).toFixed(2))
+          : ledger.demoBalance;
+      const nextAvailable =
+        ledger.balanceMode === 'real'
+          ? Number(Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2))
+          : nextDemo;
       const claimed = await this.claimLedgerEvent({
         userId,
         merchantId: ledger.merchantId,
@@ -1241,21 +1390,63 @@ export class MerchantsService {
         pendingAfter: ledger.pendingBalance,
         availableAfter: nextAvailable,
       });
-
       if (!claimed) {
         return;
       }
     }
 
-    if (ledger.balanceMode === 'real') {
-      const { error } = await this.supabaseService
-        .getAdminClient()
+    const client = this.supabaseService.getAdminClient();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const ledger = await this.getLedgerByUserId(userId);
+
+      if (!ledger) {
+        return;
+      }
+
+      if (ledger.balanceMode === 'real') {
+        const realBefore = ledger.realBalance;
+        const nextReal = Number((realBefore + amount).toFixed(2));
+        const nextAvailable = Number(
+          Math.max(nextReal - ledger.pendingBalance, 0).toFixed(2),
+        );
+        const { data, error } = await client
+          .from('merchants')
+          .update({
+            real_balance: nextReal,
+            available_balance: nextAvailable,
+          })
+          .eq('user_id', userId)
+          .eq('real_balance', realBefore)
+          .eq('pending_balance', ledger.pendingBalance)
+          .select('id')
+          .maybeSingle();
+
+        if (error) {
+          throw new InternalServerErrorException(
+            'Failed to credit merchant after bank rejection',
+          );
+        }
+
+        if (data) {
+          return;
+        }
+
+        continue;
+      }
+
+      const demoBefore = ledger.demoBalance;
+      const nextDemo = Number((demoBefore + amount).toFixed(2));
+      const { data, error } = await client
         .from('merchants')
         .update({
-          real_balance: nextReal,
-          available_balance: nextAvailable,
+          demo_balance: nextDemo,
+          available_balance: nextDemo,
         })
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .eq('demo_balance', demoBefore)
+        .select('id')
+        .maybeSingle();
 
       if (error) {
         throw new InternalServerErrorException(
@@ -1263,23 +1454,219 @@ export class MerchantsService {
         );
       }
 
-      return;
+      if (data) {
+        return;
+      }
     }
 
-    const { error } = await this.supabaseService
+    throw new InternalServerErrorException(
+      'Failed to credit merchant after concurrent updates',
+    );
+  }
+
+  /**
+   * Safe heal: pending stuck with no open transfers.
+   * Drops ghost pending and the matching overstated collected.
+   */
+  async healStuckPendingBalance(userId: string): Promise<{
+    healed: boolean;
+    pendingBefore: number;
+    realBefore: number;
+    realAfter: number;
+    reason: string;
+  }> {
+    return this.enqueueMerchantLedger(userId, () =>
+      this.healStuckPendingBalanceLocked(userId),
+    );
+  }
+
+  private async healStuckPendingBalanceLocked(userId: string): Promise<{
+    healed: boolean;
+    pendingBefore: number;
+    realBefore: number;
+    realAfter: number;
+    reason: string;
+  }> {
+    const ledger = await this.getLedgerByUserId(userId);
+
+    if (!ledger) {
+      return {
+        healed: false,
+        pendingBefore: 0,
+        realBefore: 0,
+        realAfter: 0,
+        reason: 'merchant_not_found',
+      };
+    }
+
+    const pendingBefore = ledger.pendingBalance;
+    const realBefore = ledger.realBalance;
+
+    if (pendingBefore <= 0) {
+      return {
+        healed: false,
+        pendingBefore,
+        realBefore,
+        realAfter: realBefore,
+        reason: 'no_pending',
+      };
+    }
+
+    const { data: openRows, error: openError } = await this.supabaseService
+      .getAdminClient()
+      .from('transfers')
+      .select('amount')
+      .eq('user_id', userId)
+      .in('status', ['PENDING_APPROVAL', 'PROCESSING']);
+
+    if (openError) {
+      throw new InternalServerErrorException(
+        openError.message ?? 'Failed to load open transfers',
+      );
+    }
+
+    const openSum = Number(
+      (openRows ?? [])
+        .reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
+        .toFixed(2),
+    );
+
+    if (openSum > 0) {
+      if (Math.abs(openSum - pendingBefore) < 0.02) {
+        return {
+          healed: false,
+          pendingBefore,
+          realBefore,
+          realAfter: realBefore,
+          reason: 'pending_matches_open',
+        };
+      }
+
+      return {
+        healed: false,
+        pendingBefore,
+        realBefore,
+        realAfter: realBefore,
+        reason: `pending_mismatch_open:${openSum}`,
+      };
+    }
+
+    const ghost = pendingBefore;
+    const nextReal =
+      ledger.balanceMode === 'real'
+        ? Number(Math.max(realBefore - ghost, 0).toFixed(2))
+        : realBefore;
+    const nextAvailable =
+      ledger.balanceMode === 'real' ? nextReal : ledger.demoBalance;
+
+    const refId = `heal:stuck-pending:${userId}:${ghost}`;
+    const claimed = await this.claimLedgerEvent({
+      userId,
+      merchantId: ledger.merchantId,
+      direction: 'debit',
+      amount: ghost,
+      reason: 'balance_correction',
+      refId,
+      note: `Clear stuck pending ${ghost} with no open transfers (race leftover)`,
+      realBefore,
+      realAfter: nextReal,
+      pendingBefore,
+      pendingAfter: 0,
+      availableAfter: nextAvailable,
+    });
+
+    if (!claimed) {
+      return {
+        healed: false,
+        pendingBefore,
+        realBefore,
+        realAfter: realBefore,
+        reason: 'already_healed',
+      };
+    }
+
+    const updatePayload =
+      ledger.balanceMode === 'real'
+        ? {
+            real_balance: nextReal,
+            pending_balance: 0,
+            available_balance: nextAvailable,
+          }
+        : {
+            pending_balance: 0,
+            available_balance: nextAvailable,
+          };
+
+    const { data, error } = await this.supabaseService
       .getAdminClient()
       .from('merchants')
-      .update({
-        demo_balance: nextDemo,
-        available_balance: nextDemo,
-      })
-      .eq('user_id', userId);
+      .update(updatePayload)
+      .eq('user_id', userId)
+      .eq('pending_balance', pendingBefore)
+      .eq('real_balance', realBefore)
+      .select('real_balance, pending_balance')
+      .maybeSingle();
 
     if (error) {
       throw new InternalServerErrorException(
-        'Failed to credit merchant after bank rejection',
+        error.message ?? 'Failed to heal stuck pending',
       );
     }
+
+    if (!data) {
+      return {
+        healed: false,
+        pendingBefore,
+        realBefore,
+        realAfter: realBefore,
+        reason: 'cas_conflict',
+      };
+    }
+
+    this.logger.warn(
+      `Healed stuck pending for ${userId}: pending ${pendingBefore}→0 real ${realBefore}→${nextReal}`,
+    );
+
+    return {
+      healed: true,
+      pendingBefore,
+      realBefore,
+      realAfter: Number(data.real_balance ?? nextReal),
+      reason: 'healed_stuck_pending',
+    };
+  }
+
+  async listMerchantLedgerSnapshots(): Promise<
+    Array<{
+      userId: string;
+      merchantId: string;
+      merchantName: string;
+      realBalance: number;
+      pendingBalance: number;
+      balanceMode: 'real' | 'demo';
+    }>
+  > {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('merchants')
+      .select(
+        'id, user_id, merchant_name, real_balance, pending_balance, balance_mode',
+      );
+
+    if (error) {
+      throw new InternalServerErrorException(
+        error.message ?? 'Failed to list merchants for reconcile',
+      );
+    }
+
+    return (data ?? []).map((row) => ({
+      userId: row.user_id as string,
+      merchantId: row.id as string,
+      merchantName: String(row.merchant_name ?? ''),
+      realBalance: Number(row.real_balance ?? 0),
+      pendingBalance: Number(row.pending_balance ?? 0),
+      balanceMode: row.balance_mode === 'real' ? 'real' : 'demo',
+    }));
   }
 
   async updateRealBalanceByUserId(
@@ -1332,7 +1719,7 @@ export class MerchantsService {
       return { outcome: 'merchant_not_found' };
     }
 
-    return this.enqueueCollectCredit(merchant.userId, () =>
+    return this.enqueueMerchantLedger(merchant.userId, () =>
       this.creditCollectDepositLocked(merchant, input),
     );
   }

@@ -61,8 +61,18 @@ export class TransfersService {
       throw new NotFoundException('Merchant profile not found');
     }
 
-    if (ledger.spendable < input.amount) {
-      throw new BadRequestException('Insufficient available balance');
+    if (
+      !Number.isFinite(input.amount) ||
+      input.amount <= 0 ||
+      !Number.isFinite(ledger.spendable)
+    ) {
+      throw new BadRequestException('Invalid transfer amount or balance');
+    }
+
+    if (ledger.spendable + 0.001 < input.amount) {
+      throw new BadRequestException(
+        `Insufficient available balance. Need ₹${input.amount.toLocaleString('en-IN')}, available ₹${ledger.spendable.toLocaleString('en-IN')}`,
+      );
     }
 
     const payee =
@@ -377,8 +387,16 @@ export class TransfersService {
     await this.merchantsService.assertCanTransfer(userId);
 
     const totalAmount = Number(
-      items.reduce((sum, item) => sum + item.amount, 0).toFixed(2),
+      items.reduce((sum, item) => sum + Number(item.amount), 0).toFixed(2),
     );
+
+    if (
+      !Number.isFinite(totalAmount) ||
+      totalAmount <= 0 ||
+      items.some((item) => !Number.isFinite(item.amount) || item.amount <= 0)
+    ) {
+      throw new BadRequestException('Bulk transfer amounts are invalid');
+    }
 
     const [ledger, portalUser] = await Promise.all([
       this.merchantsService.getLedgerByUserId(userId),
@@ -389,9 +407,12 @@ export class TransfersService {
       throw new NotFoundException('Merchant profile not found');
     }
 
-    if (ledger.spendable < totalAmount) {
+    if (
+      !Number.isFinite(ledger.spendable) ||
+      ledger.spendable + 0.001 < totalAmount
+    ) {
       throw new BadRequestException(
-        `Insufficient balance. Need ${totalAmount}, available ${ledger.spendable}`,
+        `Insufficient balance. Need ₹${totalAmount.toLocaleString('en-IN')}, available ₹${ledger.spendable.toLocaleString('en-IN')}`,
       );
     }
 

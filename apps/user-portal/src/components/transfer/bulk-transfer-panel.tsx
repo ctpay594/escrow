@@ -1,7 +1,7 @@
 'use client';
 
 import { AlertTriangle, Download, FileSpreadsheet, Upload } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -54,9 +54,14 @@ export function BulkTransferPanel({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [liveBalance, setLiveBalance] = useState(availableBalance);
+
+  useEffect(() => {
+    setLiveBalance(availableBalance);
+  }, [availableBalance]);
 
   const totalAmount = bulkRowsTotal(rows);
-  const remaining = availableBalance - totalAmount;
+  const remaining = liveBalance - totalAmount;
   const hasAccountWarnings = bulkRowsHaveAccountWarnings(rows);
 
   async function handleFileChange(file: File | null) {
@@ -233,8 +238,36 @@ export function BulkTransferPanel({
       return;
     }
 
-    if (totalAmount > availableBalance) {
-      toast.error('Total exceeds available balance');
+    let balanceForCheck = liveBalance;
+
+    try {
+      const profileResponse = await fetch('/api/auth/me', {
+        cache: 'no-store',
+        credentials: 'include',
+      });
+      const profileData = await profileResponse.json().catch(() => ({}));
+
+      if (profileResponse.status === 401) {
+        window.location.href = '/api/auth/logout?redirect=/login';
+        return;
+      }
+
+      if (
+        profileResponse.ok &&
+        profileData?.merchant &&
+        Number.isFinite(Number(profileData.merchant.available_balance))
+      ) {
+        balanceForCheck = Number(profileData.merchant.available_balance);
+        setLiveBalance(balanceForCheck);
+      }
+    } catch {
+      // Fall back to the balance already shown on the page.
+    }
+
+    if (totalAmount > balanceForCheck + 0.001) {
+      toast.error(
+        `Insufficient balance. Sheet total ${formatCurrency(totalAmount)}, available ${formatCurrency(balanceForCheck)}`,
+      );
       return;
     }
 
@@ -696,7 +729,7 @@ export function BulkTransferPanel({
               disabled={
                 isSubmitting ||
                 rows.length === 0 ||
-                totalAmount > availableBalance ||
+                totalAmount > liveBalance ||
                 hasAccountWarnings ||
                 disabled
               }

@@ -17,6 +17,7 @@ import type { PayoutMode } from '../transfers.types';
 const PAYOUT_MODES = ['IMPS', 'NEFT', 'RTGS', 'UPI'] as const;
 
 export class BulkTransferItemDto {
+  @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
   amount!: number;

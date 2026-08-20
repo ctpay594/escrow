@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import {
   IsIn,
   IsNumber,
@@ -12,6 +13,7 @@ import type { PayoutMode } from '../transfers.types';
 const PAYOUT_MODES = ['IMPS', 'NEFT', 'RTGS', 'UPI'] as const;
 
 export class CreateTransferDto {
+  @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
   amount!: number;

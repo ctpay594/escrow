@@ -985,14 +985,16 @@ export class MerchantsService {
     amount: number,
     ref?: LedgerMutationRef,
   ): Promise<void> {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Invalid hold amount');
+    }
+
     if (ref) {
       const ledger = await this.getLedgerByUserId(userId);
       if (!ledger) {
         throw new NotFoundException('Merchant profile not found');
       }
-      if (ledger.spendable < amount) {
-        throw new BadRequestException('Insufficient available balance');
-      }
+      this.assertSufficientSpendable(ledger, amount);
       const nextPending = Number((ledger.pendingBalance + amount).toFixed(2));
       const nextAvailable =
         ledger.balanceMode === 'real'
@@ -1013,7 +1015,9 @@ export class MerchantsService {
         availableAfter: nextAvailable,
       });
       if (!claimed) {
-        return;
+        throw new BadRequestException(
+          'Transfer hold could not be reserved (duplicate reference). Try again.',
+        );
       }
     }
 
@@ -1026,9 +1030,7 @@ export class MerchantsService {
         throw new NotFoundException('Merchant profile not found');
       }
 
-      if (ledger.spendable < amount) {
-        throw new BadRequestException('Insufficient available balance');
-      }
+      this.assertSufficientSpendable(ledger, amount);
 
       const pendingBefore = ledger.pendingBalance;
       const nextPending = Number((pendingBefore + amount).toFixed(2));
@@ -1092,6 +1094,36 @@ export class MerchantsService {
     throw new InternalServerErrorException(
       'Failed to reserve transfer funds after concurrent updates',
     );
+  }
+
+  private assertSufficientSpendable(
+    ledger: {
+      balanceMode: 'real' | 'demo';
+      realBalance: number;
+      demoBalance: number;
+      pendingBalance: number;
+      spendable: number;
+    },
+    amount: number,
+  ): void {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Invalid transfer amount');
+    }
+
+    if (!Number.isFinite(ledger.spendable) || ledger.spendable + 0.001 < amount) {
+      throw new BadRequestException(
+        `Insufficient available balance. Need ₹${amount.toLocaleString('en-IN')}, available ₹${Number(ledger.spendable || 0).toLocaleString('en-IN')}`,
+      );
+    }
+
+    if (ledger.balanceMode === 'real') {
+      const nextPending = Number((ledger.pendingBalance + amount).toFixed(2));
+      if (nextPending > ledger.realBalance + 0.001) {
+        throw new BadRequestException(
+          `Insufficient available balance. Need ₹${amount.toLocaleString('en-IN')}, available ₹${ledger.spendable.toLocaleString('en-IN')}`,
+        );
+      }
+    }
   }
 
   async clearPendingForSuccessfulTransfer(

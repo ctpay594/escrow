@@ -750,8 +750,15 @@ export class TransfersService {
     }
   }
 
-  async reconcileAllProcessingTransfers(): Promise<ReconcileTransfersResult> {
-    return this.reconcileProcessingTransfers();
+  private static readonly PAYOUT_STATUS_WATERMARK = 'payout_status_reconcile';
+  /** Overlap so rows near the previous stamp are not missed across clock skew. */
+  private static readonly WATERMARK_OVERLAP_MS = 30 * 60 * 1000;
+  private static readonly WATERMARK_FALLBACK_MS = 2 * 60 * 60 * 1000;
+
+  async reconcileAllProcessingTransfers(options?: {
+    incremental?: boolean;
+  }): Promise<ReconcileTransfersResult> {
+    return this.reconcileProcessingTransfers(options);
   }
 
   async reconcileProcessingTransfersForUser(
@@ -763,13 +770,28 @@ export class TransfersService {
   async reconcileProcessingTransfers(options?: {
     userId?: string;
     merchantId?: string;
+    /**
+     * Periodic cron: only open PROCESSING + new/missing-UTR since watermark.
+     * Advances watermark after a successful pass so we never re-scan settled history.
+     */
+    incremental?: boolean;
   }): Promise<ReconcileTransfersResult> {
+    const startedAt = new Date().toISOString();
+    const incremental = options?.incremental === true;
+    const scoped = Boolean(options?.userId || options?.merchantId);
+
+    // Open PROCESSING always (small). SUCCESS with UTR never. Missing-UTR /
+    // new rows only since watermark when incremental.
+    const reconcileSelect =
+      'id, user_id, merchant_id, payout_ref, amount, payout_mode, status, utr, bank_ref, created_at, updated_at, escrow_response, beneficiary_account_name, beneficiary_account_no, beneficiary_ifsc, beneficiary_vpa, payee_user_ref, payee_user_name, transaction_note, batch_id, source';
+
     let processingQuery = this.supabaseService
       .getAdminClient()
       .from('transfers')
-      .select('*')
+      .select(reconcileSelect)
       .eq('status', 'PROCESSING')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(100);
 
     if (options?.userId) {
       processingQuery = processingQuery.eq('user_id', options.userId);
@@ -779,63 +801,95 @@ export class TransfersService {
       processingQuery = processingQuery.eq('merchant_id', options.merchantId);
     }
 
-    const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-    let recentSuccessQuery = this.supabaseService
+    let since: string | null = null;
+    if (incremental && !scoped) {
+      const watermark = await this.getSystemWatermark(
+        TransfersService.PAYOUT_STATUS_WATERMARK,
+      );
+      const base = watermark
+        ? Date.parse(watermark)
+        : Date.now() - TransfersService.WATERMARK_FALLBACK_MS;
+      since = new Date(
+        base - TransfersService.WATERMARK_OVERLAP_MS,
+      ).toISOString();
+    } else {
+      since = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    let missingUtrQuery = this.supabaseService
       .getAdminClient()
       .from('transfers')
-      .select('*')
+      .select(reconcileSelect)
       .eq('status', 'SUCCESS')
+      .is('utr', null)
       .gte('created_at', since)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(50);
 
     if (options?.userId) {
-      recentSuccessQuery = recentSuccessQuery.eq('user_id', options.userId);
+      missingUtrQuery = missingUtrQuery.eq('user_id', options.userId);
     }
 
     if (options?.merchantId) {
-      recentSuccessQuery = recentSuccessQuery.eq(
-        'merchant_id',
-        options.merchantId,
-      );
+      missingUtrQuery = missingUtrQuery.eq('merchant_id', options.merchantId);
     }
 
-    const [processingResult, successResult] = await Promise.all([
+    const [processingResult, missingUtrResult] = await Promise.all([
       processingQuery,
-      recentSuccessQuery,
+      missingUtrQuery,
     ]);
 
-    if (processingResult.error || successResult.error) {
+    if (processingResult.error || missingUtrResult.error) {
       throw new InternalServerErrorException(
         'Failed to load processing transfers',
       );
     }
 
+    const processingTransfers = (processingResult.data ??
+      []) as TransferRecord[];
     const transfers = [
-      ...((processingResult.data ?? []) as TransferRecord[]),
-      ...((successResult.data ?? []) as TransferRecord[]),
+      ...processingTransfers,
+      ...((missingUtrResult.data ?? []) as TransferRecord[]),
     ];
 
     if (transfers.length === 0) {
+      let watermarkAdvancedTo: string | null = null;
+      if (incremental && !scoped) {
+        await this.setSystemWatermark(
+          TransfersService.PAYOUT_STATUS_WATERMARK,
+          startedAt,
+          {
+            checked: 0,
+            updated: 0,
+            stillProcessing: 0,
+            since,
+          },
+        );
+        watermarkAdvancedTo = startedAt;
+      }
+
       return {
         checked: 0,
         updated: 0,
         stillProcessing: 0,
         transfers: [],
+        since,
+        watermarkAdvancedTo,
       };
     }
 
     const credentials = this.merchantsService.getPlatformCredentials();
+    // One IST date per transfer when created/updated fall on the same day.
+    // Only add the created date when it differs (cross-midnight PROCESSING).
     const statusResult = await this.escrowStackService.getPayoutStatus(
       credentials.apiKey,
       transfers.flatMap((transfer) => {
-        const dates = [
-          ...new Set(
-            [
-              this.toIstTxnDate(transfer.updated_at),
-              this.toIstTxnDate(transfer.created_at),
-            ].filter(Boolean),
-          ),
-        ];
+        const updatedDate = this.toIstTxnDate(transfer.updated_at);
+        const createdDate = this.toIstTxnDate(transfer.created_at);
+        const dates =
+          updatedDate && createdDate && updatedDate !== createdDate
+            ? [updatedDate, createdDate]
+            : [updatedDate || createdDate].filter(Boolean);
 
         return dates.map((txnDate) => ({
           payoutRef: transfer.payout_ref,
@@ -866,20 +920,39 @@ export class TransfersService {
       }
     }
 
-    const stillProcessing = transfers.filter((transfer) => {
-      const updatedTransfer = updatedTransfers.find(
-        (item) => item.id === transfer.id,
-      );
-      const status = updatedTransfer?.status ?? transfer.status;
-
+    const updatedById = new Map(
+      updatedTransfers.map((item) => [item.id, item] as const),
+    );
+    const stillProcessing = processingTransfers.filter((transfer) => {
+      const status = updatedById.get(transfer.id)?.status ?? transfer.status;
       return status === 'PROCESSING';
     }).length;
+
+    let watermarkAdvancedTo: string | null = null;
+    // Advance even if some stay PROCESSING — those are always re-queried by
+    // status. Watermark only gates historical SUCCESS / missing-UTR growth.
+    if (incremental && !scoped) {
+      await this.setSystemWatermark(
+        TransfersService.PAYOUT_STATUS_WATERMARK,
+        startedAt,
+        {
+          checked: transfers.length,
+          updated,
+          stillProcessing,
+          since,
+          processing: processingTransfers.length,
+        },
+      );
+      watermarkAdvancedTo = startedAt;
+    }
 
     return {
       checked: transfers.length,
       updated,
       stillProcessing,
       transfers: updatedTransfers,
+      since,
+      watermarkAdvancedTo,
     };
   }
 
@@ -1135,6 +1208,64 @@ export class TransfersService {
       month: '2-digit',
       day: '2-digit',
     }).format(new Date(iso));
+  }
+
+  private async getSystemWatermark(key: string): Promise<string | null> {
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('system_watermarks')
+      .select('checked_at')
+      .eq('key', key)
+      .maybeSingle();
+
+    if (error) {
+      if (
+        error.code === '42P01' ||
+        error.code === 'PGRST205' ||
+        error.message.toLowerCase().includes('system_watermarks')
+      ) {
+        return null;
+      }
+
+      this.logger.warn(`Watermark read failed: ${error.message}`);
+      return null;
+    }
+
+    return (data?.checked_at as string | undefined) ?? null;
+  }
+
+  private async setSystemWatermark(
+    key: string,
+    checkedAt: string,
+    meta: Record<string, unknown>,
+  ): Promise<void> {
+    const { error } = await this.supabaseService
+      .getAdminClient()
+      .from('system_watermarks')
+      .upsert(
+        {
+          key,
+          checked_at: checkedAt,
+          meta,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'key' },
+      );
+
+    if (error) {
+      if (
+        error.code === '42P01' ||
+        error.code === 'PGRST205' ||
+        error.message.toLowerCase().includes('system_watermarks')
+      ) {
+        this.logger.warn(
+          'system_watermarks table missing — run 001_schema.sql watermark section',
+        );
+        return;
+      }
+
+      this.logger.warn(`Watermark write failed: ${error.message}`);
+    }
   }
 
   private pickStatusCode(raw: Record<string, unknown>): string | null {

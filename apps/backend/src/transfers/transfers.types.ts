@@ -88,6 +88,9 @@ export interface ReconcileTransfersResult {
   updated: number;
   stillProcessing: number;
   transfers: PublicTransfer[];
+  /** Lower bound used for incremental SUCCESS/missing-UTR scan */
+  since?: string | null;
+  watermarkAdvancedTo?: string | null;
 }
 
 export interface TransferBatchSummary {

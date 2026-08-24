@@ -30,6 +30,7 @@ import { glassInset, glassTableHead, glassTableRow } from '@/lib/glass-styles';
 import { updateMerchantBalanceMode } from '@/lib/merchant-balance';
 import { updateMerchantApprovalMode } from '@/lib/merchant-approval';
 import { cn } from '@/lib/utils';
+
 interface ManagedMerchant {
   id: string;
   username: string;

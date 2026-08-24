@@ -99,11 +99,11 @@ export function MerchantsListPanel() {
     virtual_account_no: string;
     escrow_ifsc: string;
   } | null>(null);
-  const [companyBankBalance, setCompanyBankBalance] = useState<number | null>(
-    null,
-  );
-  const [companyBankHold, setCompanyBankHold] = useState<number | null>(null);
+  const [companyBankTotal, setCompanyBankTotal] = useState<number | null>(null);
   const [companyBankLien, setCompanyBankLien] = useState<number | null>(null);
+  const [companyBankRemaining, setCompanyBankRemaining] = useState<
+    number | null
+  >(null);
   const [companyBankError, setCompanyBankError] = useState<string | null>(null);
   const [companyBankLoading, setCompanyBankLoading] = useState(true);
   const [editingDemoId, setEditingDemoId] = useState<string | null>(null);
@@ -136,21 +136,33 @@ export function MerchantsListPanel() {
         );
       }
 
-      const nextBank = Number(
-        bankData.available_balance ?? bankData.bank_balance,
+      const remaining = Number(
+        bankData.remaining_balance ??
+          bankData.clear_balance ??
+          bankData.available_balance ??
+          bankData.bank_balance,
+      );
+      const lien = Number(
+        bankData.lien_amount ?? bankData.hold_amount,
+      );
+      const total = Number(
+        bankData.total_balance ??
+          (Number.isFinite(remaining) && Number.isFinite(lien)
+            ? remaining + lien
+            : remaining),
       );
 
-      if (!Number.isFinite(nextBank)) {
+      if (!Number.isFinite(remaining)) {
         throw new Error('Company bank balance response was not a number');
       }
 
-      setCompanyBankBalance(nextBank);
-      const hold = Number(bankData.hold_amount);
-      const lien = Number(bankData.lien_amount);
-      setCompanyBankHold(Number.isFinite(hold) ? hold : null);
+      setCompanyBankRemaining(remaining);
       setCompanyBankLien(Number.isFinite(lien) ? lien : null);
+      setCompanyBankTotal(Number.isFinite(total) ? total : remaining);
     } catch (bankError) {
-      setCompanyBankBalance(null);
+      setCompanyBankRemaining(null);
+      setCompanyBankTotal(null);
+      setCompanyBankLien(null);
       setCompanyBankError(
         bankError instanceof Error
           ? bankError.message
@@ -571,27 +583,47 @@ export function MerchantsListPanel() {
                 />
               </button>
             </div>
-            <p className="mt-2 text-3xl font-semibold tabular-nums">
-              {companyBankLoading
-                ? '—'
-                : companyBankBalance == null
-                  ? '—'
-                  : formatCurrency(companyBankBalance)}
-            </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              {companyBankError
-                ? companyBankError
-                : [
-                    'HDFC current account · admin only',
-                    companyBankHold != null
-                      ? `Hold ${formatCurrency(companyBankHold)}`
-                      : null,
-                    companyBankLien != null
-                      ? `Lien ${formatCurrency(companyBankLien)}`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
+            {companyBankError ? (
+              <p className="mt-3 text-sm text-amber-800">{companyBankError}</p>
+            ) : (
+              <div className="mt-3 grid gap-2">
+                <div className="rounded-lg bg-muted/50 px-3 py-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Total
+                  </p>
+                  <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                    {companyBankLoading || companyBankTotal == null
+                      ? '—'
+                      : formatCurrency(companyBankTotal)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-muted/50 px-3 py-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Lien / hold
+                  </p>
+                  <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                    {companyBankLoading || companyBankLien == null
+                      ? '—'
+                      : formatCurrency(companyBankLien)}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-emerald-200/70 bg-emerald-50/60 px-3 py-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-800/80">
+                    Remaining
+                  </p>
+                  <p className="mt-0.5 text-xl font-semibold tabular-nums text-emerald-950">
+                    {companyBankLoading || companyBankRemaining == null
+                      ? '—'
+                      : formatCurrency(companyBankRemaining)}
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-emerald-900/70">
+                    Spendable for payouts
+                  </p>
+                </div>
+              </div>
+            )}
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              HDFC current · total = remaining + lien
             </p>
             <Button asChild size="sm" variant="outline" className="mt-3 w-full">
               <Link href="/transfers">Route / Transfer</Link>

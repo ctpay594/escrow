@@ -179,16 +179,32 @@ export class AdminUsersService {
       credentials.apiKey,
     );
 
+    const remaining =
+      balanceResult.availableBalance ?? balanceResult.balance;
+    const lien =
+      balanceResult.lienAmount ?? balanceResult.holdAmount ?? null;
+    const total =
+      balanceResult.totalBalance ??
+      (lien != null
+        ? Number((remaining + lien).toFixed(2))
+        : remaining);
+
     return {
-      bank_balance: balanceResult.balance,
-      available_balance: balanceResult.availableBalance ?? balanceResult.balance,
-      hold_amount: balanceResult.holdAmount ?? null,
-      lien_amount: balanceResult.lienAmount ?? null,
+      // Remaining = spendable (clear). Do not use HDFC "avaliable" as this.
+      bank_balance: remaining,
+      available_balance: remaining,
+      remaining_balance: remaining,
+      clear_balance: remaining,
+      // Total = HDFC avaliable_balance (clear + lien)
+      total_balance: total,
+      hold_amount: balanceResult.holdAmount ?? lien,
+      lien_amount: lien,
       unclear_amount: balanceResult.unclearAmount ?? null,
       ledger_balance: balanceResult.ledgerBalance ?? null,
       account_no: balanceResult.accountNo ?? null,
       customer_id: balanceResult.customerId ?? null,
-      message: 'Company current-account balance (not a merchant ledger)',
+      message:
+        'Company HDFC: total = clear+lien; remaining = spendable; lien = hold',
     };
   }
 

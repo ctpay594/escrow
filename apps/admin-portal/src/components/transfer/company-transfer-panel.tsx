@@ -17,8 +17,9 @@ import { glassInset } from '@/lib/glass-styles';
 import { cn } from '@/lib/utils';
 
 export function CompanyTransferPanel() {
-  const [availableBalance, setAvailableBalance] = useState<number | null>(null);
-  const [holdAmount, setHoldAmount] = useState<number | null>(null);
+  const [totalBalance, setTotalBalance] = useState<number | null>(null);
+  const [lienAmount, setLienAmount] = useState<number | null>(null);
+  const [remainingBalance, setRemainingBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,28 +39,46 @@ export function CompanyTransferPanel() {
         throw new Error(data.message ?? 'Failed to load company bank balance');
       }
 
-      const next =
-        typeof data.available_balance === 'number'
-          ? data.available_balance
-          : typeof data.bank_balance === 'number'
-            ? data.bank_balance
-            : null;
+      const remaining =
+        typeof data.remaining_balance === 'number'
+          ? data.remaining_balance
+          : typeof data.clear_balance === 'number'
+            ? data.clear_balance
+            : typeof data.available_balance === 'number'
+              ? data.available_balance
+              : typeof data.bank_balance === 'number'
+                ? data.bank_balance
+                : null;
 
-      if (next == null) {
+      if (remaining == null) {
         throw new Error('Company bank balance was not a number');
       }
 
-      setAvailableBalance(next);
-      setHoldAmount(
-        typeof data.hold_amount === 'number' ? data.hold_amount : null,
-      );
+      const lien =
+        typeof data.lien_amount === 'number'
+          ? data.lien_amount
+          : typeof data.hold_amount === 'number'
+            ? data.hold_amount
+            : null;
+      const total =
+        typeof data.total_balance === 'number'
+          ? data.total_balance
+          : lien != null
+            ? Number((remaining + lien).toFixed(2))
+            : remaining;
+
+      setRemainingBalance(remaining);
+      setLienAmount(lien);
+      setTotalBalance(total);
     } catch (loadError) {
       setError(
         loadError instanceof Error
           ? loadError.message
           : 'Failed to load company bank balance',
       );
-      setAvailableBalance(null);
+      setRemainingBalance(null);
+      setTotalBalance(null);
+      setLienAmount(null);
     } finally {
       setLoading(false);
     }
@@ -101,27 +120,49 @@ export function CompanyTransferPanel() {
       />
 
       <GlassCard>
-        <GlassCardContent className="grid gap-3 p-5 sm:grid-cols-2">
+        <GlassCardContent className="grid gap-3 p-5 sm:grid-cols-3">
           <div className={cn(glassInset(), 'px-4 py-3')}>
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Company available
+              Total
             </p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {loading || availableBalance == null
+              {loading || totalBalance == null
                 ? '—'
-                : formatCurrency(availableBalance)}
+                : formatCurrency(totalBalance)}
             </p>
-            {holdAmount != null ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Hold {formatCurrency(holdAmount)}
-              </p>
-            ) : null}
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Clear + lien
+            </p>
           </div>
-          <div className={cn(glassInset(), 'px-4 py-3 text-sm text-muted-foreground')}>
-            <p className="font-medium text-foreground">How this works</p>
-            <p className="mt-1.5 leading-relaxed">
-              Single or bulk IMPS / NEFT / RTGS from the current account. Rows
-              show in History as <span className="text-foreground">Company account</span>.
+          <div className={cn(glassInset(), 'px-4 py-3')}>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Lien / hold
+            </p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums">
+              {loading || lienAmount == null
+                ? '—'
+                : formatCurrency(lienAmount)}
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Locked by bank
+            </p>
+          </div>
+          <div
+            className={cn(
+              glassInset(),
+              'border border-emerald-200/70 bg-emerald-50/50 px-4 py-3',
+            )}
+          >
+            <p className="text-xs font-medium uppercase tracking-wide text-emerald-800/80">
+              Remaining
+            </p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums text-emerald-950">
+              {loading || remainingBalance == null
+                ? '—'
+                : formatCurrency(remainingBalance)}
+            </p>
+            <p className="mt-1 text-[11px] text-emerald-900/70">
+              Spendable for payouts
             </p>
           </div>
         </GlassCardContent>
@@ -149,14 +190,14 @@ export function CompanyTransferPanel() {
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
         <div className="mx-auto w-full max-w-lg lg:mx-0">
           <CompanyTransferWizard
-            availableBalance={availableBalance ?? 0}
-            disabled={loading || availableBalance == null}
+            availableBalance={remainingBalance ?? 0}
+            disabled={loading || remainingBalance == null}
             onSubmitted={() => void loadBalance()}
           />
         </div>
         <CompanyBulkTransferPanel
-          availableBalance={availableBalance ?? 0}
-          disabled={loading || availableBalance == null}
+          availableBalance={remainingBalance ?? 0}
+          disabled={loading || remainingBalance == null}
           onSubmitted={() => void loadBalance()}
         />
       </div>

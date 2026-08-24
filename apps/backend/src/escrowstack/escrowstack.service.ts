@@ -36,7 +36,12 @@ export class EscrowStackService {
       {},
     );
     const breakdown = this.extractBalanceBreakdown(response);
-    const balance = breakdown.available ?? this.extractBalance(response);
+    // HDFC: clear/balance = spendable; avaliable_balance = clear + hold (total).
+    const clear =
+      breakdown.clear ??
+      this.extractClearBalance(response) ??
+      this.extractBalance(response);
+    const total = breakdown.total ?? clear;
     const accountNo = this.pickString(response, [
       'data.account_no',
       'data.AC_NO',
@@ -52,17 +57,17 @@ export class EscrowStackService {
       ]) ?? this.pickNumericString(response, ['data.customer_id']);
 
     this.logger.log(
-      `Account balance fetched: available=${balance}` +
-        (breakdown.hold != null ? ` hold=${breakdown.hold}` : '') +
-        (breakdown.lien != null ? ` lien=${breakdown.lien}` : '') +
+      `Account balance fetched: remaining=${clear} total=${total}` +
+        (breakdown.hold != null ? ` lien=${breakdown.hold}` : '') +
         (accountNo ? ` account_no=${accountNo}` : ''),
     );
 
     return {
-      balance,
-      availableBalance: breakdown.available ?? balance,
+      balance: clear,
+      totalBalance: total,
+      availableBalance: clear,
       holdAmount: breakdown.hold,
-      lienAmount: breakdown.lien,
+      lienAmount: breakdown.lien ?? breakdown.hold,
       unclearAmount: breakdown.unclear,
       ledgerBalance: breakdown.ledger,
       accountNo,
@@ -361,15 +366,56 @@ export class EscrowStackService {
     return 0;
   }
 
+  private extractClearBalance(
+    response: Record<string, unknown>,
+  ): number | undefined {
+    const candidates = [
+      this.readPath(response, 'data.clear_balance'),
+      this.readPath(response, 'data.balance'),
+      this.readPath(response, 'clear_balance'),
+      this.readPath(response, 'balance'),
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+        return candidate;
+      }
+
+      if (typeof candidate === 'string' && candidate.trim()) {
+        const parsed = Number(candidate.replace(/,/g, ''));
+
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
   private extractBalanceBreakdown(response: Record<string, unknown>): {
-    available?: number;
+    /** HDFC avaliable_balance = clear + hold */
+    total?: number;
+    /** Spendable clear balance */
+    clear?: number;
     hold?: number;
     lien?: number;
     unclear?: number;
     ledger?: number;
   } {
     const amounts = this.collectNumericFields(response);
-    const pick = (...needles: string[]) => {
+    const pickExact = (...needles: string[]) => {
+      for (const needle of needles) {
+        for (const [key, value] of amounts) {
+          if (key === needle || key.endsWith(`.${needle}`)) {
+            return value;
+          }
+        }
+      }
+
+      return undefined;
+    };
+    const pickIncludes = (...needles: string[]) => {
       for (const [key, value] of amounts) {
         if (needles.some((needle) => key.includes(needle))) {
           return value;
@@ -380,17 +426,22 @@ export class EscrowStackService {
     };
 
     return {
-      available: pick(
+      total: pickExact(
         'avaliable_balance',
         'available_balance',
-        'available',
-        'clear_balance',
-        'acavail',
+        'data.avaliable_balance',
+        'data.available_balance',
       ),
-      hold: pick('hold_amount', 'holdamt', 'hold_amt', 'achold', 'hold'),
-      lien: pick('lien_amount', 'lienamt', 'lien_amt', 'aclien', 'lien'),
-      unclear: pick('unclear', 'float'),
-      ledger: pick('ledger_balance', 'account_balance', 'acledger', 'ledger'),
+      clear: pickExact(
+        'clear_balance',
+        'data.clear_balance',
+        'balance',
+        'data.balance',
+      ),
+      hold: pickIncludes('hold_amount', 'holdamt', 'hold_amt', 'achold'),
+      lien: pickIncludes('lien_amount', 'lienamt', 'lien_amt', 'aclien'),
+      unclear: pickIncludes('unclear', 'float'),
+      ledger: pickIncludes('ledger_balance', 'acledger'),
     };
   }
 

@@ -1,5 +1,8 @@
 export interface EscrowBalanceResult {
+  /** Spendable / clear balance (HDFC `clear_balance` / `balance`). */
   balance: number;
+  /** HDFC `avaliable_balance` = clear + hold (total book figure). */
+  totalBalance?: number;
   availableBalance?: number;
   holdAmount?: number;
   lienAmount?: number;

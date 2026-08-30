@@ -15,6 +15,7 @@ import type { TransferStatus } from '../transfers/transfers.types';
 import { CreateBulkTransferDto } from '../transfers/dto/create-bulk-transfer.dto';
 import { CreateTransferDto } from '../transfers/dto/create-transfer.dto';
 import { AdminJwtAuthGuard } from './admin-jwt-auth.guard';
+import { AdminAnalyticsService } from './admin-analytics.service';
 import { AdminAuthService, AdminUsersService } from './admin.service';
 import type { AdminJwtPayload } from './admin.types';
 import { CurrentAdmin } from './current-admin.decorator';
@@ -224,5 +225,24 @@ export class AdminTransfersController {
   @Post(':id/reject')
   rejectTransfer(@Param('id') id: string) {
     return this.transfersService.rejectTransfer(id);
+  }
+}
+
+@Controller('admin/analytics')
+@UseGuards(AdminJwtAuthGuard)
+export class AdminAnalyticsController {
+  constructor(private readonly adminAnalyticsService: AdminAnalyticsService) {}
+
+  @Get()
+  getAnalytics(
+    @Query('user_id') userId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.adminAnalyticsService.getAnalytics({
+      userId: userId?.trim() || undefined,
+      from: from?.trim() || undefined,
+      to: to?.trim() || undefined,
+    });
   }
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Bell, ChevronDown, History, LogOut, Menu, Send, Users, X } from 'lucide-react';
+import { Bell, BarChart3, ChevronDown, History, LogOut, Menu, Send, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { AdminLogo } from '@/components/admin-logo';
 import { UserPortalLiveLink } from '@/components/user-portal-live-link';
@@ -56,6 +56,7 @@ export function AdminHeader({ adminUsername, activePath }: AdminHeaderProps) {
     { href: '/', label: 'Merchants', icon: Users },
     { href: '/transfers', label: 'Transfer', icon: Send },
     { href: '/history', label: 'History', icon: History },
+    { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   ];
 
   return (

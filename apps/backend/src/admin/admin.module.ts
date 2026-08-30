@@ -6,15 +6,18 @@ import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
 import { AdminsModule } from '../admins';
 import { EscrowStackModule } from '../escrowstack';
 import { MerchantsModule } from '../merchants';
+import { SupabaseModule } from '../supabase';
 import { TransfersModule } from '../transfers';
 import { UsersModule } from '../users';
 import { AdminJwtAuthGuard } from './admin-jwt-auth.guard';
 import {
   AdminAuthController,
+  AdminAnalyticsController,
   AdminBankController,
   AdminTransfersController,
   AdminUsersController,
 } from './admin.controller';
+import { AdminAnalyticsService } from './admin-analytics.service';
 import { AdminAuthService, AdminUsersService } from './admin.service';
 
 @Module({
@@ -23,6 +26,7 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
     UsersModule,
     MerchantsModule,
     EscrowStackModule,
+    SupabaseModule,
     TransfersModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -42,10 +46,12 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
     AdminBankController,
     AdminUsersController,
     AdminTransfersController,
+    AdminAnalyticsController,
   ],
   providers: [
     AdminAuthService,
     AdminUsersService,
+    AdminAnalyticsService,
     AdminJwtAuthGuard,
     LoginRateLimitGuard,
   ],

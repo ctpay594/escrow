@@ -375,3 +375,41 @@ CREATE TABLE IF NOT EXISTS public.system_watermarks (
   meta JSONB,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ========== bank statement sync (HDFC recon) ==========
+CREATE TABLE IF NOT EXISTS public.bank_statement_syncs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sync_date DATE NOT NULL,
+  trigger_type TEXT NOT NULL CHECK (trigger_type IN ('cron', 'manual')),
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+  ref_user_no TEXT,
+  credit_lines INT NOT NULL DEFAULT 0,
+  deposits_added INT NOT NULL DEFAULT 0,
+  deposits_skipped INT NOT NULL DEFAULT 0,
+  unmatched_credits INT NOT NULL DEFAULT 0,
+  details JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error_message TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS bank_statement_syncs_sync_date_idx
+  ON public.bank_statement_syncs (sync_date DESC);
+CREATE INDEX IF NOT EXISTS bank_statement_syncs_started_at_idx
+  ON public.bank_statement_syncs (started_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.admin_notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT,
+  payload JSONB,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS admin_notifications_created_at_idx
+  ON public.admin_notifications (created_at DESC);
+CREATE INDEX IF NOT EXISTS admin_notifications_unread_idx
+  ON public.admin_notifications (created_at DESC)
+  WHERE read_at IS NULL;

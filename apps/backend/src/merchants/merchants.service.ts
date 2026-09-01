@@ -1996,6 +1996,52 @@ export class MerchantsService {
     };
   }
 
+  async findMerchantByVirtualAccountHint(hint: string): Promise<{
+    userId: string;
+    merchantId: string;
+    virtualAccountNo: string;
+    merchantName: string;
+  } | null> {
+    const normalized = hint.trim().toUpperCase();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const { data, error } = await this.supabaseService
+      .getAdminClient()
+      .from('merchants')
+      .select('id, user_id, virtual_account_no, merchant_name')
+      .ilike('virtual_account_no', `%${normalized}%`)
+      .limit(5);
+
+    if (error || !data?.length) {
+      return null;
+    }
+
+    const sorted = [...data].sort((a, b) => {
+      const aVa = String(a.virtual_account_no ?? '');
+      const bVa = String(b.virtual_account_no ?? '');
+      const aExact = aVa.toUpperCase() === normalized ? 1 : 0;
+      const bExact = bVa.toUpperCase() === normalized ? 1 : 0;
+
+      if (aExact !== bExact) {
+        return bExact - aExact;
+      }
+
+      return bVa.length - aVa.length;
+    });
+
+    const row = sorted[0];
+
+    return {
+      userId: row.user_id as string,
+      merchantId: row.id as string,
+      virtualAccountNo: String(row.virtual_account_no ?? ''),
+      merchantName: String(row.merchant_name ?? ''),
+    };
+  }
+
   private async findMerchantByUserRef(userRef: string): Promise<{
     userId: string;
     merchantId: string;

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { getIndianPayoutTimestamp, signPayoutPayload } from './payout-signing';
 import type {
   EscrowBalanceResult,
+  EscrowInspectResult,
   PayoutItem,
   PayoutStatusEntry,
   PayoutStatusQuery,
@@ -205,6 +206,50 @@ export class EscrowStackService {
     }
 
     return { entries, raw: rawByRef };
+  }
+
+  /** Raw passthrough for admin testing — does not throw on HTTP errors. */
+  async inspectPost(
+    apiKey: string,
+    path: string,
+    body: Record<string, unknown>,
+    timeoutMs = 15000,
+  ): Promise<EscrowInspectResult> {
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: apiKey,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      const text = await response.text();
+      let parsed: unknown;
+
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = { _raw: text };
+      }
+
+      return {
+        path,
+        httpStatus: response.status,
+        body: parsed,
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'EscrowStack request failed';
+
+      return {
+        path,
+        httpStatus: 0,
+        body: { message, error: true },
+      };
+    }
   }
 
   decodeMerchantNameFromApiKey(apiKey: string): string | null {

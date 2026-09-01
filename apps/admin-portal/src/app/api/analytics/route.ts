@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
   try {
     const data = await backendFetch(`/admin/analytics${query}`, {
       headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 25000,
     });
 
     return NextResponse.json(data);

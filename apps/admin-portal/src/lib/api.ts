@@ -16,7 +16,7 @@ export function getApiUrl(path: string): string {
 
 export async function backendFetch<T>(
   path: string,
-  init?: RequestInit,
+  init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!headers.has('Content-Type')) {
@@ -29,16 +29,19 @@ export async function backendFetch<T>(
     headers.set('x-session-token', authorization.slice(7).trim());
   }
 
+  const timeoutMs = init?.timeoutMs ?? 8000;
+  const { timeoutMs: _timeoutMs, ...fetchInit } = init ?? {};
+
   let response: Response;
 
   try {
     response = await fetch(getApiUrl(path), {
-      ...init,
+      ...fetchInit,
       headers,
       cache: 'no-store',
-      signal: init?.signal
-        ? AbortSignal.any([init.signal, AbortSignal.timeout(8000)])
-        : AbortSignal.timeout(8000),
+      signal: fetchInit.signal
+        ? AbortSignal.any([fetchInit.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
   } catch {
     throw new BackendRequestError(

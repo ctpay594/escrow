@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { jwtExpiresInSeconds } from '../config/jwt-expires';
 import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
 import { AdminsModule } from '../admins';
+import { BankSyncModule } from '../bank-sync';
 import { EscrowStackModule } from '../escrowstack';
 import { MerchantsModule } from '../merchants';
 import { SupabaseModule } from '../supabase';
@@ -13,6 +14,7 @@ import { AdminJwtAuthGuard } from './admin-jwt-auth.guard';
 import {
   AdminAuthController,
   AdminAnalyticsController,
+  AdminBankSyncController,
   AdminBankController,
   AdminTransfersController,
   AdminUsersController,
@@ -26,6 +28,7 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
     UsersModule,
     MerchantsModule,
     EscrowStackModule,
+    BankSyncModule,
     SupabaseModule,
     TransfersModule,
     JwtModule.registerAsync({
@@ -47,6 +50,7 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
     AdminUsersController,
     AdminTransfersController,
     AdminAnalyticsController,
+    AdminBankSyncController,
   ],
   providers: [
     AdminAuthService,

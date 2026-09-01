@@ -17,6 +17,7 @@ import { CreateTransferDto } from '../transfers/dto/create-transfer.dto';
 import { AdminJwtAuthGuard } from './admin-jwt-auth.guard';
 import { AdminAnalyticsService } from './admin-analytics.service';
 import { AdminAuthService, AdminUsersService } from './admin.service';
+import { BankSyncService } from '../bank-sync';
 import type { AdminJwtPayload } from './admin.types';
 import { CurrentAdmin } from './current-admin.decorator';
 import { AdminLoginDto } from './dto/admin-login.dto';
@@ -244,5 +245,36 @@ export class AdminAnalyticsController {
       from: from?.trim() || undefined,
       to: to?.trim() || undefined,
     });
+  }
+}
+
+@Controller('admin/bank-sync')
+@UseGuards(AdminJwtAuthGuard)
+export class AdminBankSyncController {
+  constructor(private readonly bankSyncService: BankSyncService) {}
+
+  @Get('status')
+  getStatus() {
+    return this.bankSyncService.getStatus();
+  }
+
+  @Get('runs')
+  listRuns() {
+    return this.bankSyncService.listRecentRuns();
+  }
+
+  @Get('notifications')
+  listNotifications() {
+    return this.bankSyncService.listNotifications();
+  }
+
+  @Post('notifications/read')
+  markNotificationsRead(@Body() body: { ids?: string[] }) {
+    return this.bankSyncService.markNotificationsRead(body.ids);
+  }
+
+  @Post('run')
+  runManualSync() {
+    return this.bankSyncService.runManualSync();
   }
 }

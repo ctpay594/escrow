@@ -54,3 +54,32 @@ export interface PayoutStatusResult {
   entries: PayoutStatusEntry[];
   raw: Record<string, unknown>;
 }
+
+export interface EscrowInspectResult {
+  path: string;
+  httpStatus: number;
+  body: unknown;
+}
+
+export interface BankStatementRow {
+  TransactionDate?: string;
+  TransactionTime?: string;
+  TransactionDescription?: string;
+  TransactionAmount?: string;
+  Debit_Credit?: string;
+  ReferenceNo?: string;
+  ValueDate?: string;
+  TransactionBranch?: string;
+  RunningBalance?: string;
+  Transaction_Description_Details?: Record<string, unknown>;
+}
+
+export interface BankStatementSummary {
+  row_count: number;
+  credit_count: number;
+  debit_count: number;
+  credit_total: number;
+  debit_total: number;
+  value_dates: string[];
+  fields: string[];
+}

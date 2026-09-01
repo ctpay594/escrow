@@ -23,17 +23,6 @@ function emptyBucket(): AnalyticsVolumeBucket {
   };
 }
 
-function addBucket(target: AnalyticsVolumeBucket, source: AnalyticsVolumeBucket) {
-  target.in_amount += source.in_amount;
-  target.in_count += source.in_count;
-  target.out_success_amount += source.out_success_amount;
-  target.out_success_count += source.out_success_count;
-  target.out_failed_amount += source.out_failed_amount;
-  target.out_failed_count += source.out_failed_count;
-  target.out_pending_amount += source.out_pending_amount;
-  target.out_pending_count += source.out_pending_count;
-}
-
 function todayYmdIst(now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: IST,

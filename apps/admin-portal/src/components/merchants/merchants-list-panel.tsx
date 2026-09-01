@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronRight, Pencil, Plus, RefreshCw, Search, Users } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { BankSyncPanel } from '@/components/merchants/bank-sync-panel';
 import type { ApprovalMode } from '@/components/merchants/approval-mode-toggle';
 import { ApprovalModeToggle } from '@/components/merchants/approval-mode-toggle';
 import type { BalanceMode } from '@/components/merchants/balance-mode-toggle';
@@ -658,6 +659,8 @@ export function MerchantsListPanel() {
           </div>
         </GlassCardContent>
       </GlassCard>
+
+      <BankSyncPanel onDepositsAdded={() => void loadData()} />
 
       {onboardingOpen ? (
         <GlassCard className="overflow-hidden border-dashed border-slate-300/80">

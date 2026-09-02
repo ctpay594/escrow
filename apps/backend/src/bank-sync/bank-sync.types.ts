@@ -44,6 +44,6 @@ export interface BankSyncStatus {
   last_synced_date: string | null;
   last_run_at: string | null;
   last_run_status: string | null;
-  unread_notifications: number;
+  last_run_summary: string | null;
   is_running: boolean;
 }

@@ -47,24 +47,51 @@ export class BankSyncService {
     const { data: lastRun } = await this.supabaseService
       .getAdminClient()
       .from('bank_statement_syncs')
-      .select('started_at, status')
+      .select(
+        'started_at, status, sync_date, deposits_added, deposits_skipped, unmatched_credits, error_message',
+      )
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-
-    const { count } = await this.supabaseService
-      .getAdminClient()
-      .from('admin_notifications')
-      .select('id', { count: 'exact', head: true })
-      .is('read_at', null);
 
     return {
       last_synced_date: watermark,
       last_run_at: (lastRun?.started_at as string | undefined) ?? null,
       last_run_status: (lastRun?.status as string | undefined) ?? null,
-      unread_notifications: count ?? 0,
+      last_run_summary: lastRun ? this.formatLastRunSummary(lastRun) : null,
       is_running: this.running,
     };
+  }
+
+  private formatLastRunSummary(run: {
+    status?: string;
+    sync_date?: string;
+    deposits_added?: number;
+    deposits_skipped?: number;
+    unmatched_credits?: number;
+    error_message?: string | null;
+  }): string {
+    const syncDate = run.sync_date ?? '';
+    const added = Number(run.deposits_added ?? 0);
+    const skipped = Number(run.deposits_skipped ?? 0);
+    const unmatched = Number(run.unmatched_credits ?? 0);
+
+    if (run.status === 'failed') {
+      return (
+        run.error_message ??
+        `Sync failed for ${syncDate}`
+      );
+    }
+
+    if (added > 0) {
+      return `${added} missed deposit${added === 1 ? '' : 's'} credited · ${skipped} already in ledger`;
+    }
+
+    if (unmatched > 0) {
+      return `${skipped} matched · ${unmatched} need review`;
+    }
+
+    return `${skipped} deposit${skipped === 1 ? '' : 's'} checked — nothing missing`;
   }
 
   async listRecentRuns(limit = 10) {
@@ -373,12 +400,6 @@ export class BankSyncService {
       };
 
       await this.failRun(runId, failed, message);
-      await this.createNotification({
-        kind: 'bank_sync_failed',
-        title: `HDFC statement sync failed · ${syncDate}`,
-        body: message,
-        payload: { sync_date: syncDate, trigger },
-      });
 
       return failed;
     }
@@ -555,15 +576,6 @@ export class BankSyncService {
         completed_at: new Date().toISOString(),
       })
       .eq('id', runId);
-
-    if (result.deposits_added > 0) {
-      await this.createNotification({
-        kind: 'bank_sync_summary',
-        title: `HDFC sync · ${result.sync_date}`,
-        body: `${result.deposits_added} missed deposit(s) credited. ${result.unmatched_credits} unmatched credit line(s).`,
-        payload: result,
-      });
-    }
   }
 
   private async failRun(

@@ -3,7 +3,7 @@ import { backendFetch, errorStatusFromMessage } from '@/lib/api';
 import { getAdminSessionToken } from '@/lib/admin-session';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+export const maxDuration = 120;
 
 export async function POST() {
   const token = await getAdminSessionToken();
@@ -16,7 +16,7 @@ export async function POST() {
     const data = await backendFetch('/admin/bank-sync/run', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
-      timeoutMs: 300_000,
+      timeoutMs: 120_000,
     });
 
     return NextResponse.json(data);

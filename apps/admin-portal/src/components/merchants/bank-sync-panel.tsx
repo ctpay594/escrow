@@ -388,7 +388,7 @@ export function BankSyncPanel({ onDepositsAdded }: { onDepositsAdded?: () => voi
 
         {isBusy ? (
           <p className="text-xs text-muted-foreground">
-            Fetching HDFC statement — this can take 1–3 minutes.
+            Checking HDFC statement — usually a few seconds. If not ready, try again later.
           </p>
         ) : null}
       </GlassCardContent>

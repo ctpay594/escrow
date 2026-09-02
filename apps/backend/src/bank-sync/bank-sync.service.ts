@@ -14,6 +14,8 @@ import {
 } from './bank-sync.types';
 
 const IST = 'Asia/Kolkata';
+const STATEMENT_STATUS_MAX_ATTEMPTS = 3;
+const STATEMENT_STATUS_RETRY_MS = 5_000;
 const SKIP_CREDIT_PATTERNS = [
   /charge/i,
   /lien/i,
@@ -405,9 +407,9 @@ export class BankSyncService {
       );
     }
 
-    for (let attempt = 0; attempt < 24; attempt += 1) {
+    for (let attempt = 0; attempt < STATEMENT_STATUS_MAX_ATTEMPTS; attempt += 1) {
       if (attempt > 0) {
-        await this.delay(10_000);
+        await this.delay(STATEMENT_STATUS_RETRY_MS);
       }
 
       const status = await this.escrowStackService.inspectPost(
@@ -428,9 +430,9 @@ export class BankSyncService {
         );
       }
 
-      if (attempt === 23) {
+      if (attempt === STATEMENT_STATUS_MAX_ATTEMPTS - 1) {
         throw new InternalServerErrorException(
-          'Timed out waiting for HDFC statement (codStatus still I)',
+          'HDFC statement not ready yet — try again in a few minutes',
         );
       }
     }

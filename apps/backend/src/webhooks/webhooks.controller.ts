@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Post,
+  Req,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { WebhooksService } from './webhooks.service';
 
@@ -6,28 +14,15 @@ import { WebhooksService } from './webhooks.service';
 export class WebhooksController {
   constructor(private readonly webhooksService: WebhooksService) {}
 
+  /** Quiet 404 — do not advertise webhook paths or trigger side effects. */
   @Get()
   listEndpoints() {
-    return {
-      ok: true,
-      message: 'Webhook is running. Bank should POST JSON here.',
-      callback: 'POST /webhooks/escrowstack',
-      supabase_table: 'callbacks',
-    };
+    throw new NotFoundException();
   }
 
   @Get('escrowstack')
-  async getEscrowStackStatus() {
-    await this.webhooksService.replayStoredCollects();
-
-    return {
-      ok: true,
-      status: 'running',
-      message:
-        'Callback URL is live. Bank POSTs JSON. Collect credits are applied from Virtual Account + Amount.',
-      method: 'POST',
-      url: '/webhooks/escrowstack',
-    };
+  getEscrowStackStatus() {
+    throw new NotFoundException();
   }
 
   @Post('escrowstack')

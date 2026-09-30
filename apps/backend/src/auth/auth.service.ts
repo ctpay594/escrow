@@ -4,7 +4,6 @@ import { MerchantsService } from '../merchants';
 import { UsersService } from '../users';
 import type { AuthResponse, JwtPayload } from './auth.types';
 import type { LoginDto } from './dto/login.dto';
-import type { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -13,15 +12,6 @@ export class AuthService {
     private readonly merchantsService: MerchantsService,
     private readonly jwtService: JwtService,
   ) {}
-
-  async register(dto: RegisterDto): Promise<AuthResponse> {
-    const user = await this.usersService.create(dto.username, dto.password);
-
-    return this.buildAuthResponse({
-      id: user.id,
-      username: user.username,
-    });
-  }
 
   async login(dto: LoginDto): Promise<AuthResponse> {
     const user = await this.usersService.findByUsername(dto.username.trim());

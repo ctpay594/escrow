@@ -413,3 +413,22 @@ CREATE INDEX IF NOT EXISTS admin_notifications_created_at_idx
 CREATE INDEX IF NOT EXISTS admin_notifications_unread_idx
   ON public.admin_notifications (created_at DESC)
   WHERE read_at IS NULL;
+
+-- ========== login audit (user + admin) ==========
+CREATE TABLE IF NOT EXISTS public.login_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  realm TEXT NOT NULL CHECK (realm IN ('user', 'admin')),
+  username TEXT,
+  user_id UUID,
+  success BOOLEAN NOT NULL,
+  ip TEXT,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS login_events_created_at_idx
+  ON public.login_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS login_events_username_idx
+  ON public.login_events (username, created_at DESC);
+CREATE INDEX IF NOT EXISTS login_events_ip_idx
+  ON public.login_events (ip, created_at DESC);

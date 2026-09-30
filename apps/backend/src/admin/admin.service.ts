@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AdminsService } from '../admins';
+import { LoginAuditService } from '../common/login-audit.service';
 import { EscrowStackService } from '../escrowstack';
 import { MerchantsService } from '../merchants';
 import { UsersService } from '../users';
@@ -15,19 +16,45 @@ import type {
   UpdateManagedUsernameDto,
 } from './dto/managed-user.dto';
 
+export interface AdminLoginRequestMeta {
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
 @Injectable()
 export class AdminAuthService {
   constructor(
     private readonly adminsService: AdminsService,
     private readonly jwtService: JwtService,
+    private readonly loginAuditService: LoginAuditService,
   ) {}
 
-  async login(dto: AdminLoginDto): Promise<AdminAuthResponse> {
-    const admin = await this.adminsService.findByUsername(dto.username.trim());
+  async login(
+    dto: AdminLoginDto,
+    meta: AdminLoginRequestMeta = {},
+  ): Promise<AdminAuthResponse> {
+    const username = dto.username.trim();
+    const admin = await this.adminsService.findByUsername(username);
 
     if (!admin || admin.password !== dto.password) {
+      await this.loginAuditService.record({
+        realm: 'admin',
+        username,
+        success: false,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
       throw new UnauthorizedException('Invalid username or password');
     }
+
+    await this.loginAuditService.record({
+      realm: 'admin',
+      username: admin.username,
+      userId: admin.id,
+      success: true,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    });
 
     return this.buildAuthResponse({
       id: admin.id,

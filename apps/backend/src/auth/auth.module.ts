@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
-import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
+import { CommonModule } from '../common/common.module';
 import { jwtExpiresInSeconds } from '../config/jwt-expires';
 import { MerchantsModule } from '../merchants';
 import { UsersModule } from '../users';
@@ -13,6 +13,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
   imports: [
     UsersModule,
     MerchantsModule,
+    CommonModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -27,7 +28,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard, LoginRateLimitGuard],
+  providers: [AuthService, JwtAuthGuard],
   exports: [AuthService, JwtAuthGuard, JwtModule],
 })
 export class AuthModule {}

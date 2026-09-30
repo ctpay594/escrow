@@ -6,9 +6,8 @@ export interface HealthCheckResult {
   message?: string;
 }
 
+/** Compact public probe — avoid naming internal services. */
 export interface HealthResponse {
-  status: HealthStatus;
-  timestamp: string;
-  uptime: number;
-  checks: Record<string, HealthCheckResult>;
+  /** S = ok, D = degraded, E = error */
+  s: 'S' | 'D' | 'E';
 }

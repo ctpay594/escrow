@@ -8,26 +8,19 @@ import {
 
 @Injectable()
 export class HealthService {
-  private readonly startedAt = Date.now();
-
   constructor(private readonly supabaseService: SupabaseService) {}
 
   async getHealth(): Promise<HealthResponse> {
     const checks: Record<string, HealthCheckResult> = {
-      api: this.checkApi(),
-      supabase: await this.supabaseService.checkConnection(),
+      api: { status: 'ok' },
+      db: await this.supabaseService.checkConnection(),
     };
+
+    const status = this.aggregateStatus(checks);
 
     return {
-      status: this.aggregateStatus(checks),
-      timestamp: new Date().toISOString(),
-      uptime: Math.floor((Date.now() - this.startedAt) / 1000),
-      checks,
+      s: status === 'ok' ? 'S' : status === 'degraded' ? 'D' : 'E',
     };
-  }
-
-  private checkApi(): HealthCheckResult {
-    return { status: 'ok', message: 'Backend API is running' };
   }
 
   private aggregateStatus(

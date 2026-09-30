@@ -6,8 +6,9 @@ import {
   Injectable,
 } from '@nestjs/common';
 
+/** Stricter login throttle: 5 tries / 15 min per IP+path. */
 const WINDOW_MS = 15 * 60 * 1000;
-const MAX_ATTEMPTS = 10;
+const MAX_ATTEMPTS = 5;
 
 @Injectable()
 export class LoginRateLimitGuard implements CanActivate {
@@ -24,7 +25,9 @@ export class LoginRateLimitGuard implements CanActivate {
     const ip =
       (typeof forwarded === 'string'
         ? forwarded.split(',')[0]?.trim()
-        : request.ip) ?? 'unknown';
+        : Array.isArray(forwarded)
+          ? forwarded[0]?.split(',')[0]?.trim()
+          : request.ip) ?? 'unknown';
 
     const key = `${ip}:${request.path}`;
     const now = Date.now();
@@ -42,6 +45,18 @@ export class LoginRateLimitGuard implements CanActivate {
 
     timestamps.push(now);
     this.attempts.set(key, timestamps);
+
+    if (this.attempts.size > 5000) {
+      for (const [entryKey, times] of this.attempts) {
+        const fresh = times.filter((time) => time > windowStart);
+        if (fresh.length === 0) {
+          this.attempts.delete(entryKey);
+        } else {
+          this.attempts.set(entryKey, fresh);
+        }
+      }
+    }
+
     return true;
   }
 }

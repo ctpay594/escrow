@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { jwtExpiresInSeconds } from '../config/jwt-expires';
-import { LoginRateLimitGuard } from '../common/login-rate-limit.guard';
+import { CommonModule } from '../common/common.module';
 import { AdminsModule } from '../admins';
 import { BankSyncModule } from '../bank-sync';
 import { EscrowStackModule } from '../escrowstack';
@@ -31,14 +31,17 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
     BankSyncModule,
     SupabaseModule,
     TransfersModule,
+    CommonModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         secret: configService.getOrThrow<string>('ADMIN_JWT_SECRET'),
         signOptions: {
+          // Default 12h — set ADMIN_JWT_EXPIRES_IN_SECONDS on VPS to override
           expiresIn: jwtExpiresInSeconds(
             configService,
             'ADMIN_JWT_EXPIRES_IN_SECONDS',
+            43_200,
           ),
         },
       }),
@@ -57,7 +60,6 @@ import { AdminAuthService, AdminUsersService } from './admin.service';
     AdminUsersService,
     AdminAnalyticsService,
     AdminJwtAuthGuard,
-    LoginRateLimitGuard,
   ],
 })
 export class AdminModule {}

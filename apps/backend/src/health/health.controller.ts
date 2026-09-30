@@ -14,7 +14,7 @@ export class HealthController {
   ): Promise<HealthResponse> {
     const health = await this.healthService.getHealth();
 
-    if (health.status === 'error') {
+    if (health.s === 'E') {
       res.status(HttpStatus.SERVICE_UNAVAILABLE);
     }
 

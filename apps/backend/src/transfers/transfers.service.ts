@@ -20,6 +20,8 @@ import type {
   BulkTransferResult,
   CreateCompanyTransferInput,
   CreateTransferInput,
+  MerchantVolumeBucket,
+  MerchantVolumeResult,
   PublicTransfer,
   ReconcileTransfersResult,
   TransferRecord,
@@ -33,6 +35,42 @@ const PUBLIC_TRANSFER_FIELDS =
 const PUBLIC_TRANSFER_SELECT = `id, ${PUBLIC_TRANSFER_FIELDS}`;
 
 const PUBLIC_TRANSFER_SELECT_WITH_BATCH = `id, batch_id, ${PUBLIC_TRANSFER_FIELDS}`;
+
+const IST = 'Asia/Kolkata';
+
+function emptyVolumeBucket(): MerchantVolumeBucket {
+  return { in_amount: 0, in_count: 0, out_amount: 0, out_count: 0 };
+}
+
+function todayYmdIst(now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+function shiftYmd(ymd: string, days: number) {
+  const [year, month, day] = ymd.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function istYmd(iso: string) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso));
+}
+
+function mondayOfIstWeek(todayYmd: string) {
+  const weekday = new Date(`${todayYmd}T12:00:00+05:30`).getDay();
+  const daysFromMonday = (weekday + 6) % 7;
+  return shiftYmd(todayYmd, -daysFromMonday);
+}
 
 @Injectable()
 export class TransfersService {
@@ -651,6 +689,146 @@ export class TransfersService {
 
   listDepositsForUser(userId: string) {
     return this.merchantsService.listDepositsForUser(userId);
+  }
+
+  async getVolumeForUser(userId: string): Promise<MerchantVolumeResult> {
+    const today = todayYmdIst();
+    const weekFrom = mondayOfIstWeek(today);
+    const dayKeys = [0, 1, 2, 3].map((offset) => shiftYmd(today, -offset));
+    const daysFrom = dayKeys[dayKeys.length - 1]!;
+    const rangeFrom = weekFrom < daysFrom ? weekFrom : daysFrom;
+
+    const byDay = new Map(
+      dayKeys.map((date) => [date, emptyVolumeBucket()] as const),
+    );
+    const week = emptyVolumeBucket();
+
+    const applyIn = (ymd: string, amount: number) => {
+      const dayBucket = byDay.get(ymd);
+      if (dayBucket) {
+        dayBucket.in_amount += amount;
+        dayBucket.in_count += 1;
+      }
+      if (ymd >= weekFrom && ymd <= today) {
+        week.in_amount += amount;
+        week.in_count += 1;
+      }
+    };
+
+    const applyOut = (ymd: string, amount: number) => {
+      const dayBucket = byDay.get(ymd);
+      if (dayBucket) {
+        dayBucket.out_amount += amount;
+        dayBucket.out_count += 1;
+      }
+      if (ymd >= weekFrom && ymd <= today) {
+        week.out_amount += amount;
+        week.out_count += 1;
+      }
+    };
+
+    const [deposits, transfers] = await Promise.all([
+      this.fetchPagedUserRows<{ amount: number; created_at: string }>(
+        (from, to) =>
+          this.supabaseService
+            .getAdminClient()
+            .from('deposits')
+            .select('amount, created_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .range(from, to),
+      ),
+      this.fetchPagedUserRows<{
+        amount: number;
+        status: string;
+        created_at: string;
+      }>((from, to) =>
+        this.supabaseService
+          .getAdminClient()
+          .from('transfers')
+          .select('amount, status, created_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .range(from, to),
+      ),
+    ]);
+
+    for (const deposit of deposits) {
+      const ymd = istYmd(deposit.created_at);
+      if (ymd < rangeFrom || ymd > today) {
+        continue;
+      }
+      applyIn(ymd, Number(deposit.amount ?? 0));
+    }
+
+    let awaitingApproval = 0;
+    let processing = 0;
+
+    for (const transfer of transfers) {
+      if (transfer.status === 'PENDING_APPROVAL') {
+        awaitingApproval += 1;
+      } else if (transfer.status === 'PROCESSING') {
+        processing += 1;
+      }
+
+      if (transfer.status !== 'SUCCESS') {
+        continue;
+      }
+
+      const ymd = istYmd(transfer.created_at);
+      if (ymd < rangeFrom || ymd > today) {
+        continue;
+      }
+      applyOut(ymd, Number(transfer.amount ?? 0));
+    }
+
+    return {
+      days: dayKeys.map((date) => ({
+        date,
+        ...byDay.get(date)!,
+      })),
+      week,
+      awaiting_approval: awaitingApproval,
+      processing,
+      period: {
+        today,
+        week_from: weekFrom,
+        days_from: daysFrom,
+      },
+      generated_at: new Date().toISOString(),
+    };
+  }
+
+  private async fetchPagedUserRows<T>(
+    query: (
+      from: number,
+      to: number,
+    ) => PromiseLike<{ data: T[] | null; error: { message?: string } | null }>,
+  ): Promise<T[]> {
+    const pageSize = 1000;
+    let offset = 0;
+    const rows: T[] = [];
+
+    for (;;) {
+      const { data, error } = await query(offset, offset + pageSize - 1);
+
+      if (error) {
+        throw new InternalServerErrorException(
+          error.message ?? 'Failed to load volume data',
+        );
+      }
+
+      const batch = data ?? [];
+      rows.push(...batch);
+
+      if (batch.length < pageSize) {
+        break;
+      }
+
+      offset += pageSize;
+    }
+
+    return rows;
   }
 
   async listTransfersForAdmin(

@@ -16,6 +16,11 @@ export class TransfersController {
     return this.transfersService.listTransfersForUser(user.sub);
   }
 
+  @Get('volume')
+  getVolume(@CurrentUser() user: JwtPayload) {
+    return this.transfersService.getVolumeForUser(user.sub);
+  }
+
   @Get('deposits')
   listDeposits(@CurrentUser() user: JwtPayload) {
     return this.transfersService.listDepositsForUser(user.sub);

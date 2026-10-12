@@ -124,8 +124,41 @@ interface VolumeBucket {
   outCount: number;
 }
 
+interface VolumeApiResponse {
+  days: {
+    date: string;
+    in_amount: number;
+    in_count: number;
+    out_amount: number;
+    out_count: number;
+  }[];
+  week: {
+    in_amount: number;
+    in_count: number;
+    out_amount: number;
+    out_count: number;
+  };
+  awaiting_approval: number;
+  processing: number;
+  period: { today: string };
+}
+
 function emptyBucket(): VolumeBucket {
   return { inAmount: 0, inCount: 0, outAmount: 0, outCount: 0 };
+}
+
+function toVolumeBucket(row: {
+  in_amount: number;
+  in_count: number;
+  out_amount: number;
+  out_count: number;
+}): VolumeBucket {
+  return {
+    inAmount: Number(row.in_amount ?? 0),
+    inCount: Number(row.in_count ?? 0),
+    outAmount: Number(row.out_amount ?? 0),
+    outCount: Number(row.out_count ?? 0),
+  };
 }
 
 export function AccountDashboard({
@@ -137,6 +170,7 @@ export function AccountDashboard({
   const [batchMeta, setBatchMeta] = useState<Map<string, TransferBatchMeta>>(
     () => new Map(),
   );
+  const [volume, setVolume] = useState<VolumeApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshingBalance, setRefreshingBalance] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,18 +179,30 @@ export function AccountDashboard({
   const loadTransfers = useCallback(async () => {
     setError(null);
     try {
-      const [transfersResponse, depositsResponse] = await Promise.all([
-        fetch('/api/transfers'),
-        fetch('/api/deposits'),
-      ]);
+      const [transfersResponse, depositsResponse, volumeResponse] =
+        await Promise.all([
+          fetch('/api/transfers'),
+          fetch('/api/deposits'),
+          fetch('/api/transfers/volume'),
+        ]);
       const transfersData = await transfersResponse.json();
       const depositsData = await depositsResponse.json();
-      if (transfersResponse.status === 401 || depositsResponse.status === 401) {
+      const volumeData = await volumeResponse.json().catch(() => null);
+      if (
+        transfersResponse.status === 401 ||
+        depositsResponse.status === 401 ||
+        volumeResponse.status === 401
+      ) {
         window.location.href = '/api/auth/logout?redirect=/login';
         return;
       }
       if (!transfersResponse.ok) {
         throw new Error(transfersData.message ?? 'Failed to load activity');
+      }
+      if (volumeResponse.ok && volumeData?.days && volumeData?.week) {
+        setVolume(volumeData as VolumeApiResponse);
+      } else {
+        setVolume(null);
       }
       const parsed = parseUserTransfersResponse(transfersData);
       setBatchMeta(parsed.batches);
@@ -231,7 +277,23 @@ export function AccountDashboard({
   const transfersEnabled = canMerchantTransfer(merchant.account_status);
 
   const snapshot = useMemo(() => {
-    const todayYmd = istYmd(new Date().toISOString());
+    const todayYmd = volume?.period.today ?? istYmd(new Date().toISOString());
+
+    if (volume) {
+      return {
+        todayYmd,
+        awaitingApproval: volume.awaiting_approval,
+        inProgress: volume.processing,
+        days: volume.days.map((day) => ({
+          key: day.date,
+          label: formatDayHeading(day.date, todayYmd),
+          ...toVolumeBucket(day),
+        })),
+        week: toVolumeBucket(volume.week),
+      };
+    }
+
+    // Fallback if volume API unavailable (should match previous client math)
     const weekStart = mondayOfIstWeek(todayYmd);
     const dayKeys = [0, 1, 2, 3].map((offset) => shiftYmd(todayYmd, -offset));
     const byDay = new Map<string, VolumeBucket>(
@@ -242,8 +304,7 @@ export function AccountDashboard({
     for (const row of transfers) {
       const day = istYmd(row.created_at);
       const isDeposit = row.kind === 'deposit';
-      const isPaidOut =
-        !isDeposit && row.status === 'SUCCESS';
+      const isPaidOut = !isDeposit && row.status === 'SUCCESS';
 
       if (!isDeposit && !isPaidOut) {
         continue;
@@ -269,15 +330,11 @@ export function AccountDashboard({
       }
     }
 
-    const awaitingApproval = transfers.filter(
-      (t) => t.status === 'PENDING_APPROVAL',
-    ).length;
-    const inProgress = transfers.filter((t) => t.status === 'PROCESSING').length;
-
     return {
       todayYmd,
-      awaitingApproval,
-      inProgress,
+      awaitingApproval: transfers.filter((t) => t.status === 'PENDING_APPROVAL')
+        .length,
+      inProgress: transfers.filter((t) => t.status === 'PROCESSING').length,
       days: dayKeys.map((key) => ({
         key,
         label: formatDayHeading(key, todayYmd),
@@ -285,7 +342,7 @@ export function AccountDashboard({
       })),
       week,
     };
-  }, [transfers]);
+  }, [transfers, volume]);
 
   const recentActivity = useMemo(
     () => buildHistoryEntries(transfers, batchMeta).slice(0, 5),
@@ -409,8 +466,8 @@ export function AccountDashboard({
               </table>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              Incoming is deposits. Outgoing is successful payouts. Days use
-              India time.
+              Incoming is deposits. Outgoing is successful payouts. Same ledger
+              rules as admin analytics · India time.
             </p>
           </div>
 

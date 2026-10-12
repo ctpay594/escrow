@@ -119,3 +119,28 @@ export interface UserTransfersListResult {
   transfers: PublicTransfer[];
   batches: TransferBatchSummary[];
 }
+
+/** Same rules as admin analytics: deposits = in, SUCCESS payouts = out (IST days). */
+export interface MerchantVolumeBucket {
+  in_amount: number;
+  in_count: number;
+  out_amount: number;
+  out_count: number;
+}
+
+export interface MerchantVolumeDay extends MerchantVolumeBucket {
+  date: string;
+}
+
+export interface MerchantVolumeResult {
+  days: MerchantVolumeDay[];
+  week: MerchantVolumeBucket;
+  awaiting_approval: number;
+  processing: number;
+  period: {
+    today: string;
+    week_from: string;
+    days_from: string;
+  };
+  generated_at: string;
+}

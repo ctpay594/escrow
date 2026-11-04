@@ -1364,14 +1364,18 @@ export class TransfersService {
     if (
       odStatus === 'po_bp_dcp' ||
       odStatus === 'txsett' ||
+      odStatus === 'txdsett' ||
       odStatus === 'txcomp' ||
       odStatus === 'txncomp' ||
+      odStatus === 'txpdst' ||
       txnStatus === 'completed' ||
       txnStatus === 'complete' ||
       txnStatus === 'success' ||
+      txnStatus === 'processed' ||
       txnStatus === 'txsett' ||
       txnStatus === 'txcomp' ||
-      txnStatus === 'settled'
+      txnStatus === 'settled' ||
+      txnStatus === 'deemed settled'
     ) {
       return 'SUCCESS';
     }

@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { backendFetch } from '@/lib/api';
 import { ADMIN_SESSION_COOKIE } from '@/lib/constants';
 
+/** Allow long EscrowStack status polls (Vercel Pro / compatible hosts). */
+export const maxDuration = 120;
+
 async function getAdminToken(): Promise<string | null> {
   const cookieStore = await cookies();
   return cookieStore.get(ADMIN_SESSION_COOKIE)?.value ?? null;
@@ -19,9 +22,11 @@ export async function POST(request: NextRequest) {
   const query = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
 
   try {
+    // Reconcile polls EscrowStack per PROCESSING payout — often >8s with many open rows.
     const data = await backendFetch(`/admin/transfers/reconcile-status${query}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 120_000,
     });
 
     return NextResponse.json(data);

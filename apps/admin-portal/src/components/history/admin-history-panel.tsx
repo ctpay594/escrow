@@ -44,6 +44,7 @@ import { formatCurrency, formatDate, formatTableDate } from '@/lib/format';
 import {
   defaultCustomRange,
   historyPeriodLabel,
+  normalizeRange,
   rangeForPreset,
   statementRangeMeta,
   type HistoryPeriodPreset,
@@ -181,15 +182,36 @@ export function AdminHistoryPanel() {
     { kind: 'batch' }
   > | null>(null);
 
+  const historyQuery = useMemo(() => {
+    const params = new URLSearchParams();
+
+    if (merchantId !== 'all' && merchantId !== 'company') {
+      params.set('user_id', merchantId);
+    }
+
+    if (period !== 'all') {
+      const range =
+        period === 'custom'
+          ? normalizeRange(rangeFrom, rangeTo)
+          : rangeForPreset(period);
+      if (range?.from) params.set('from', range.from);
+      if (range?.to) params.set('to', range.to);
+    }
+
+    const query = params.toString();
+    return query ? `?${query}` : '';
+  }, [merchantId, period, rangeFrom, rangeTo]);
+
   const loadData = useCallback(async () => {
+    setIsLoading(true);
     setError(null);
 
     try {
       const [usersResponse, transfersResponse, depositsResponse] =
         await Promise.all([
           fetch('/api/users', { cache: 'no-store' }),
-          fetch('/api/transfers', { cache: 'no-store' }),
-          fetch('/api/deposits', { cache: 'no-store' }),
+          fetch(`/api/transfers${historyQuery}`, { cache: 'no-store' }),
+          fetch(`/api/deposits${historyQuery}`, { cache: 'no-store' }),
         ]);
 
       const usersData = await usersResponse.json();
@@ -251,7 +273,7 @@ export function AdminHistoryPanel() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [historyQuery]);
 
   useEffect(() => {
     void loadData();

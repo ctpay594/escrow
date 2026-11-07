@@ -2217,42 +2217,84 @@ export class MerchantsService {
     );
   }
 
-  async listDepositsForAdmin(): Promise<AdminDepositListItem[]> {
-    const { data, error } = await this.supabaseService
-      .getAdminClient()
-      .from('deposits')
-      .select(
-        'id, user_id, merchant_id, amount, utr, virtual_account, remitter_name, remitter_account, created_at',
-      )
-      .order('created_at', { ascending: false })
-      .limit(2000);
+  async listDepositsForAdmin(options?: {
+    userId?: string;
+    fromYmd?: string;
+    toYmd?: string;
+  }): Promise<AdminDepositListItem[]> {
+    const fromIso = options?.fromYmd?.trim()
+      ? `${options.fromYmd.trim()}T00:00:00+05:30`
+      : undefined;
+    const toIso = options?.toYmd?.trim()
+      ? `${options.toYmd.trim()}T23:59:59.999+05:30`
+      : undefined;
+    const userId = options?.userId?.trim() || undefined;
 
-    if (error) {
-      if (
-        error.message.toLowerCase().includes('deposits') &&
-        (error.message.toLowerCase().includes('does not exist') ||
-          error.code === '42P01' ||
-          error.code === 'PGRST205')
-      ) {
-        return [];
+    const pageSize = 1000;
+    let offset = 0;
+    const rows: AdminDepositListItem[] = [];
+
+    for (;;) {
+      let query = this.supabaseService
+        .getAdminClient()
+        .from('deposits')
+        .select(
+          'id, user_id, merchant_id, amount, utr, virtual_account, remitter_name, remitter_account, created_at',
+        )
+        .order('created_at', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+
+      if (userId) {
+        query = query.eq('user_id', userId);
       }
 
-      throw new InternalServerErrorException(
-        error.message ?? 'Failed to load deposits',
-      );
+      if (fromIso) {
+        query = query.gte('created_at', fromIso);
+      }
+
+      if (toIso) {
+        query = query.lte('created_at', toIso);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        if (
+          error.message.toLowerCase().includes('deposits') &&
+          (error.message.toLowerCase().includes('does not exist') ||
+            error.code === '42P01' ||
+            error.code === 'PGRST205')
+        ) {
+          return [];
+        }
+
+        throw new InternalServerErrorException(
+          error.message ?? 'Failed to load deposits',
+        );
+      }
+
+      const batch = (data ?? []).map((row) => ({
+        id: row.id as string,
+        user_id: (row.user_id as string | null) ?? null,
+        merchant_id: (row.merchant_id as string | null) ?? null,
+        amount: Number(row.amount ?? 0),
+        utr: (row.utr as string | null) ?? null,
+        virtual_account: String(row.virtual_account ?? ''),
+        remitter_name: (row.remitter_name as string | null) ?? null,
+        remitter_account: (row.remitter_account as string | null) ?? null,
+        created_at: row.created_at as string,
+      }));
+
+      rows.push(...batch);
+
+      if (batch.length < pageSize) {
+        break;
+      }
+
+      offset += pageSize;
     }
 
-    return (data ?? []).map((row) => ({
-      id: row.id as string,
-      user_id: (row.user_id as string | null) ?? null,
-      merchant_id: (row.merchant_id as string | null) ?? null,
-      amount: Number(row.amount ?? 0),
-      utr: (row.utr as string | null) ?? null,
-      virtual_account: String(row.virtual_account ?? ''),
-      remitter_name: (row.remitter_name as string | null) ?? null,
-      remitter_account: (row.remitter_account as string | null) ?? null,
-      created_at: row.created_at as string,
-    }));
+    return rows;
   }
 
   async getApiKeyByUserId(_userId: string): Promise<string> {

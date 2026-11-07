@@ -834,15 +834,21 @@ export class TransfersService {
   async listTransfersForAdmin(
     status?: TransferStatus,
     userId?: string,
+    fromYmd?: string,
+    toYmd?: string,
   ): Promise<AdminTransferListItem[]> {
-    const rows = await this.fetchTransferRows((select) => {
+    const fromIso = this.istDayStartIso(fromYmd);
+    const toIso = this.istDayEndIso(toYmd);
+    const joinSelect =
+      ', user_id, merchant_id, payee_user_ref, payee_user_name, escrow_response, users ( username ), merchants ( merchant_name )';
+
+    const rows = await this.fetchPagedTransferRows((select, from, to) => {
       let query = this.supabaseService
         .getAdminClient()
         .from('transfers')
-        .select(
-          `${select}, user_id, merchant_id, payee_user_ref, payee_user_name, escrow_response, users ( username ), merchants ( merchant_name )`,
-        )
-        .order('created_at', { ascending: false });
+        .select(`${select}${joinSelect}`)
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
       if (status) {
         query = query.eq('status', status);
@@ -850,6 +856,14 @@ export class TransfersService {
 
       if (userId) {
         query = query.eq('user_id', userId);
+      }
+
+      if (fromIso) {
+        query = query.gte('created_at', fromIso);
+      }
+
+      if (toIso) {
+        query = query.lte('created_at', toIso);
       }
 
       return query;
@@ -1640,6 +1654,22 @@ export class TransfersService {
     ];
   }
 
+  private istDayStartIso(ymd?: string): string | undefined {
+    if (!ymd?.trim()) {
+      return undefined;
+    }
+
+    return `${ymd.trim()}T00:00:00+05:30`;
+  }
+
+  private istDayEndIso(ymd?: string): string | undefined {
+    if (!ymd?.trim()) {
+      return undefined;
+    }
+
+    return `${ymd.trim()}T23:59:59.999+05:30`;
+  }
+
   private async fetchTransferRows(
     run: (select: string) => PromiseLike<{
       data: unknown[] | null;
@@ -1659,6 +1689,63 @@ export class TransfersService {
     }
 
     throw new InternalServerErrorException('Failed to load transfers');
+  }
+
+  private async fetchPagedTransferRows(
+    run: (
+      select: string,
+      from: number,
+      to: number,
+    ) => PromiseLike<{
+      data: unknown[] | null;
+      error: { message: string } | null;
+    }>,
+  ): Promise<unknown[]> {
+    let workingSelect: string | null = null;
+
+    for (const select of this.transferSelectCandidates()) {
+      const { error } = await run(select, 0, 0);
+
+      if (!error) {
+        workingSelect = select;
+        break;
+      }
+
+      if (!this.isMissingBatchColumnError(error.message)) {
+        throw new InternalServerErrorException('Failed to load transfers');
+      }
+    }
+
+    if (!workingSelect) {
+      throw new InternalServerErrorException('Failed to load transfers');
+    }
+
+    const pageSize = 1000;
+    let offset = 0;
+    const rows: unknown[] = [];
+
+    for (;;) {
+      const { data, error } = await run(
+        workingSelect,
+        offset,
+        offset + pageSize - 1,
+      );
+
+      if (error) {
+        throw new InternalServerErrorException('Failed to load transfers');
+      }
+
+      const batch = data ?? [];
+      rows.push(...batch);
+
+      if (batch.length < pageSize) {
+        break;
+      }
+
+      offset += pageSize;
+    }
+
+    return rows;
   }
 
   private async fetchTransferRowById(

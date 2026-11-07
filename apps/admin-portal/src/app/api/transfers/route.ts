@@ -17,9 +17,13 @@ export async function GET(request: NextRequest) {
 
   const status = request.nextUrl.searchParams.get('status');
   const userId = request.nextUrl.searchParams.get('user_id');
+  const from = request.nextUrl.searchParams.get('from');
+  const to = request.nextUrl.searchParams.get('to');
   const params = new URLSearchParams();
   if (status) params.set('status', status);
   if (userId) params.set('user_id', userId);
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
   const query = params.size > 0 ? `?${params.toString()}` : '';
 
   try {

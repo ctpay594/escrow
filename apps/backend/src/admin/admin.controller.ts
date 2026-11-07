@@ -157,8 +157,16 @@ export class AdminUsersController {
   }
 
   @Get('deposits')
-  listAllDeposits() {
-    return this.adminUsersService.listAllDeposits();
+  listAllDeposits(
+    @Query('user_id') userId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.adminUsersService.listAllDeposits({
+      userId: userId?.trim() || undefined,
+      fromYmd: from?.trim() || undefined,
+      toYmd: to?.trim() || undefined,
+    });
   }
 
   @Get(':id/deposits')
@@ -189,8 +197,15 @@ export class AdminTransfersController {
   listTransfers(
     @Query('status') status?: TransferStatus,
     @Query('user_id') userId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.transfersService.listTransfersForAdmin(status, userId);
+    return this.transfersService.listTransfersForAdmin(
+      status,
+      userId?.trim() || undefined,
+      from?.trim() || undefined,
+      to?.trim() || undefined,
+    );
   }
 
   @Post('company')

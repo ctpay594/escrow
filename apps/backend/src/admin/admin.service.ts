@@ -243,8 +243,12 @@ export class AdminUsersService {
     return this.merchantsService.listLedgerForUser(userId);
   }
 
-  listAllDeposits() {
-    return this.merchantsService.listDepositsForAdmin();
+  listAllDeposits(options?: {
+    userId?: string;
+    fromYmd?: string;
+    toYmd?: string;
+  }) {
+    return this.merchantsService.listDepositsForAdmin(options);
   }
 
   async refreshRealBalance(_id: string) {

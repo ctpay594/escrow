@@ -23,9 +23,13 @@ export async function GET(
   try {
     const data = await backendFetch(`/admin/users/${id}/deposits`, {
       headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: 120_000,
     });
 
-    return NextResponse.json(data);
+    const count = Array.isArray(data) ? data.length : 0;
+    return NextResponse.json(data, {
+      headers: { 'X-Deposit-Count': String(count) },
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Failed to load deposits';

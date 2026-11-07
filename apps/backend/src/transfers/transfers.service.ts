@@ -840,8 +840,9 @@ export class TransfersService {
   ): Promise<AdminTransferListItem[]> {
     const fromIso = this.istDayStartIso(fromYmd);
     const toIso = this.istDayEndIso(toYmd);
+    // Omit escrow_response on list — payloads are huge and were timing out / truncating UX.
     const joinSelect =
-      ', user_id, merchant_id, payee_user_ref, payee_user_name, escrow_response, users ( username ), merchants ( merchant_name )';
+      ', user_id, merchant_id, payee_user_ref, payee_user_name, users ( username ), merchants ( merchant_name )';
 
     const rows = await this.fetchPagedTransferRows((select, from, to) => {
       let query = this.supabaseService

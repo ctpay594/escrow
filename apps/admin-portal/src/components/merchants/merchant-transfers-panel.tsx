@@ -185,7 +185,7 @@ function transferDestination(transfer: AdminTransfer): string {
   return `${account} · ${ifsc}`;
 }
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 20;
 
 function transferUtr(transfer: AdminTransfer) {
   if (transfer.status === 'FAILED' || transfer.status === 'REJECTED') {

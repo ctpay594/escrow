@@ -2131,44 +2131,62 @@ export class MerchantsService {
   }
 
   async listLedgerForUser(userId: string): Promise<LedgerEntry[]> {
-    const { data, error } = await this.supabaseService
-      .getAdminClient()
-      .from('ledger_entries')
-      .select(
-        'id, direction, amount, reason, ref_id, note, real_before, real_after, pending_before, pending_after, available_after, created_at',
-      )
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(2000);
+    const pageSize = 1000;
+    let offset = 0;
+    const rows: LedgerEntry[] = [];
 
-    if (error) {
-      if (this.isMissingLedgerTable(error.message, error.code)) {
-        return [];
+    for (;;) {
+      const { data, error } = await this.supabaseService
+        .getAdminClient()
+        .from('ledger_entries')
+        .select(
+          'id, direction, amount, reason, ref_id, note, real_before, real_after, pending_before, pending_after, available_after, created_at',
+        )
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+
+      if (error) {
+        if (this.isMissingLedgerTable(error.message, error.code)) {
+          return [];
+        }
+
+        throw new InternalServerErrorException(
+          error.message ?? 'Failed to load balance log',
+        );
       }
 
-      throw new InternalServerErrorException(
-        error.message ?? 'Failed to load balance log',
-      );
+      const batch = (data ?? []).map((row) => ({
+        id: row.id as string,
+        direction: (row.direction === 'debit' ? 'debit' : 'credit') as
+          | 'debit'
+          | 'credit',
+        amount: Number(row.amount ?? 0),
+        reason: String(row.reason ?? ''),
+        ref_id: String(row.ref_id ?? ''),
+        note: (row.note as string | null) ?? null,
+        real_before:
+          row.real_before == null ? null : Number(row.real_before),
+        real_after: row.real_after == null ? null : Number(row.real_after),
+        pending_before:
+          row.pending_before == null ? null : Number(row.pending_before),
+        pending_after:
+          row.pending_after == null ? null : Number(row.pending_after),
+        available_after:
+          row.available_after == null ? null : Number(row.available_after),
+        created_at: row.created_at as string,
+      }));
+
+      rows.push(...batch);
+
+      if (batch.length < pageSize) {
+        break;
+      }
+
+      offset += pageSize;
     }
 
-    return (data ?? []).map((row) => ({
-      id: row.id as string,
-      direction: row.direction === 'debit' ? 'debit' : 'credit',
-      amount: Number(row.amount ?? 0),
-      reason: String(row.reason ?? ''),
-      ref_id: String(row.ref_id ?? ''),
-      note: (row.note as string | null) ?? null,
-      real_before:
-        row.real_before == null ? null : Number(row.real_before),
-      real_after: row.real_after == null ? null : Number(row.real_after),
-      pending_before:
-        row.pending_before == null ? null : Number(row.pending_before),
-      pending_after:
-        row.pending_after == null ? null : Number(row.pending_after),
-      available_after:
-        row.available_after == null ? null : Number(row.available_after),
-      created_at: row.created_at as string,
-    }));
+    return rows;
   }
 
   private isMissingLedgerTable(message: string, code?: string): boolean {

@@ -653,13 +653,14 @@ export class TransfersService {
 
   async listTransfersForUser(userId: string): Promise<UserTransfersListResult> {
     const [rows, batchesResult] = await Promise.all([
-      this.fetchTransferRows((select) =>
+      this.fetchPagedTransferRows((select, from, to) =>
         this.supabaseService
           .getAdminClient()
           .from('transfers')
           .select(select)
           .eq('user_id', userId)
-          .order('created_at', { ascending: false }),
+          .order('created_at', { ascending: false })
+          .range(from, to),
       ),
       this.supabaseService
         .getAdminClient()

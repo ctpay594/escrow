@@ -315,6 +315,7 @@ export function MerchantTransfersPanel({
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
         ),
       );
+      setPage(1);
     } catch (loadError) {
       setError(
         loadError instanceof Error

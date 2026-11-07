@@ -19,7 +19,6 @@ import {
 } from '@/components/merchants/balance-mode-toggle';
 import { CopyField } from '@/components/shared/copy-field';
 import { ErrorCard } from '@/components/shared/page-header';
-import { BalanceLogPanel, type LedgerEntry } from '@/components/merchants/balance-log-panel';
 import { MerchantTransfersPanel } from '@/components/merchants/merchant-transfers-panel';
 import {
   SeriousConfirmDialog,
@@ -92,8 +91,6 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
   const [confirmAction, setConfirmAction] = useState<(() => Promise<void>) | null>(
     null,
   );
-  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
-
   const loadMerchant = useCallback(async () => {
     setError(null);
 
@@ -143,23 +140,6 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
   useEffect(() => {
     void loadMerchant();
   }, [loadMerchant]);
-
-  useEffect(() => {
-    void (async () => {
-      const response = await fetch(
-        `/api/users/${encodeURIComponent(merchantId)}/ledger`,
-        { cache: 'no-store' },
-      );
-
-      if (!response.ok) {
-        setLedger([]);
-        return;
-      }
-
-      const data = await response.json();
-      setLedger(Array.isArray(data) ? (data as LedgerEntry[]) : []);
-    })();
-  }, [merchantId, merchant?.real_balance, merchant?.demo_balance]);
 
   function askConfirmation(
     options: SeriousConfirmOptions,
@@ -690,8 +670,6 @@ export function MerchantDetailPanel({ merchantId }: MerchantDetailPanelProps) {
           </div>
         </GlassCardContent>
       </GlassCard>
-
-      <BalanceLogPanel ledger={ledger} />
 
       <MerchantTransfersPanel
         merchantId={merchant.id}
